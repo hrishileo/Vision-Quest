@@ -78,6 +78,9 @@ export const useGuide = create<GuideState>((set) => ({
       const next: Partial<GuideState> = { mode };
       if (mode === "anatomy") {
         next.camView = "orbit";
+        next.explode = 0.52;
+        next.shell = 1;
+        next.selected = null;
       }
       if (mode === "controller") {
         next.selected = s.selected ?? "fc";

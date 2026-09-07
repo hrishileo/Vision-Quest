@@ -115,6 +115,7 @@ export class GuideEngine {
   private mix: [number, number, number, number] = [0.18, 0.18, 0.18, 0.18];
   private studioCarPhase = 0;
   private wasTouring = false;
+  private lastMode: string = "anatomy";
   private ro: ResizeObserver | null = null;
   private onPointerDown: (e: PointerEvent) => void;
   private onPointerMove: (e: PointerEvent) => void;
@@ -488,6 +489,11 @@ export class GuideEngine {
     const simDt = s.paused ? 0 : dt;
     this.idle += dt;
 
+    if (s.mode !== this.lastMode) {
+      this.onModeChange(this.lastMode, s.mode);
+      this.lastMode = s.mode;
+    }
+
     if (s.touring && !s.paused) {
       if (!this.wasTouring) {
         this.tourIndex = 0;
@@ -646,6 +652,45 @@ export class GuideEngine {
       this.lastTelemetry = 0;
       this.pushTelemetry(s.mode);
     }
+  }
+
+  private onModeChange(from: string, to: string) {
+    this.idle = 0;
+    this.lockBeam.visible = false;
+    this.predMesh.visible = false;
+    this.frustum.visible = to === "controller" || to === "vision" || to === "pursuit";
+    this.hoverObj = null;
+    if (to === "pursuit") {
+      this.controls.maxDistance = 48;
+      this.controls.minDistance = 1.2;
+      const back = _v.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+      this.camera.position.copy(this.dronePos).addScaledVector(back, -7.2).add(_v3.set(0, 3.1, 0));
+      this.controls.target.copy(this.dronePos);
+      this.controls.target.y += 0.4;
+    } else {
+      this.drone.group.position.set(0, 0, 0);
+      this.drone.group.rotation.set(0, 0, 0);
+      this.yaw = 0;
+      this.roll = 0;
+      this.pitch = 0;
+      this.drone.gimbalYaw.rotation.y = 0;
+      this.drone.gimbalPitch.rotation.x = to === "controller" ? 0.35 : 0;
+      const pos =
+        to === "controller"
+          ? [0.62, 0.4, 0.78]
+          : to === "vision"
+            ? [1.22, 0.55, 1.38]
+            : [2.05, 1.18, 2.28];
+      const tgt = to === "vision" ? [0, 0.02, 0.08] : [0, 0.04, 0];
+      this.camera.position.set(pos[0]!, pos[1]!, pos[2]!);
+      this.controls.target.set(tgt[0]!, tgt[1]!, tgt[2]!);
+      this.controls.minDistance = to === "controller" ? 0.18 : 0.22;
+      this.controls.maxDistance = 12;
+    }
+    this.controls.enableDamping = false;
+    this.controls.update();
+    this.controls.enableDamping = true;
+    void from;
   }
 
   private advanceTour(dt: number) {

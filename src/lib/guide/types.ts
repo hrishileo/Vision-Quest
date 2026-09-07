@@ -44,6 +44,6 @@ export type Telemetry = {
 export const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "anatomy", label: "Airframe", hint: "Exploded assembly" },
   { id: "controller", label: "Controller", hint: "IMU · PID · mixer" },
-  { id: "vision", label: "Vision FSD", hint: "Detect · track · guide" },
+  { id: "vision", label: "Vision FSD", hint: "Camera · detect · track" },
   { id: "pursuit", label: "Pursuit", hint: "Live vehicle lock" },
 ];

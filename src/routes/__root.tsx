@@ -15,7 +15,7 @@ export const Route = createRootRoute({
       {
         name: "description",
         content:
-          "Vision Quest — interactive 3D briefing for the OSPREY vision-FSD pursuit drone.",
+          "Vision Quest — Horizon Vision 3D briefing. Camera-based FSD and vehicle tracking on Jetson Orin.",
       },
     ],
     links: [

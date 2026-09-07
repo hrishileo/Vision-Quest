@@ -156,15 +156,15 @@ export function Overlay() {
       <header className="pointer-events-auto flex items-start justify-between gap-3 p-3 md:p-5">
         <div className="min-w-0">
           <p className="font-mono text-2xs uppercase tracking-[0.28em] text-muted">
-            Vision Quest · AF-650
+            Horizon Vision · HV-1
           </p>
           <h1 className="mt-1 font-sans text-xl font-medium tracking-tight md:text-2xl">
-            OSPREY
+            Vision Quest
           </h1>
           <p className="mt-0.5 hidden max-w-sm text-xs text-muted sm:block">
             {buildView === "finished"
-              ? "Finished airframe · assembled product shot"
-              : "Skeleton rig · explode the stack"}
+              ? "Finished airframe · camera FSD · Jetson Orin"
+              : "Skeleton · PX4 + Orin + dedicated vision camera"}
           </p>
           <div className="mt-2 flex gap-1" role="group" aria-label="Build">
             {(["skeleton", "finished"] as BuildView[]).map((v) => (
@@ -299,9 +299,9 @@ export function Overlay() {
                 </h2>
                 <p className="mt-2 text-sm leading-relaxed text-muted">
                   {mode === "pursuit"
-                    ? "The NPU holds a Kalman track on the selected car. Click another vehicle to switch lock. Drag to orbit, or switch FPV."
+                    ? "Orin holds a Kalman track on the selected car — camera only, no LiDAR. Click another vehicle to switch lock."
                     : buildView === "finished"
-                      ? "Assembled product shot. Toggle Skeleton to explode the stack. Send part photos and this body gets rebuilt from them."
+                      ? "Horizon Vision flight article. Toggle Skeleton to see the PX4 + Orin stack. Real part photos replace this body."
                       : "Hover a part — the name follows the pointer. Click for the spec sheet. Drag to orbit. Press T to tour."}
                 </p>
               </>
@@ -528,7 +528,7 @@ export function Overlay() {
         )}
         {mode === "vision" && (
           <span className="flex items-center gap-1">
-            <Radio className="size-3" /> NPU · 12 TOPS
+            <Radio className="size-3" /> ORIN · 40 TOPS
           </span>
         )}
       </div>

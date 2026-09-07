@@ -64,7 +64,7 @@ export const PARTS: PartInfo[] = [
     summary:
       "STM32H7 running a PX4-class stack. Gyro at 4 kHz, attitude at 1 kHz, position at 100 Hz. This is the inner-loop computer.",
     role: "Fuses IMU, baro, mag, and GPS; runs rate and angle PIDs; mixes onto four motors. Companion vision never writes motors directly.",
-    fsd: "The NPU sends a position + velocity setpoint at 50 Hz. The FC is the last authority: if vision glitches, the inner loop still holds attitude.",
+    fsd: "Horizon Vision never writes motors. Orin sends a NED setpoint at 50 Hz. The FC is last authority: if vision drops, attitude still holds.",
     specs: [
       { label: "MCU", value: "STM32H743" },
       { label: "Gyro", value: "4 kHz BMI088" },
@@ -87,29 +87,29 @@ export const PARTS: PartInfo[] = [
   },
   {
     id: "npu",
-    name: "Vision companion",
+    name: "Jetson Orin Nano",
     group: "Perception",
     summary:
-      "A 12 TOPS NPU running the detector and tracker. It is a passenger on the UART / Ethernet link — it never drives MOSFETs.",
-    role: "Turns camera frames into a 3D target state (position, velocity, covariance) in the NED frame the FC already uses.",
-    fsd: "This is the FSD brain: detect vehicles, pick one, keep a Kalman lock, and emit a pursuit setpoint. Fail-closed: no packet, no setpoint.",
+      "NVIDIA Jetson Orin Nano — Horizon Vision’s edge computer. Detector, tracker, and local map run here. LiDAR is off the stack; the camera is the only scene sensor.",
+    role: "Turns CSI frames into a 3D target state (position, velocity, covariance) in the NED frame the FC already uses. UART / Ethernet passenger — it never drives MOSFETs.",
+    fsd: "This is the FSD brain: detect vehicles, pick one, keep a Kalman lock, emit a pursuit setpoint. Fail-closed: no packet, no setpoint. Local map is built from tracks, not a point cloud.",
     specs: [
-      { label: "Compute", value: "12 TOPS INT8" },
-      { label: "Det net", value: "YOLO-class 640" },
-      { label: "Setpoint", value: "50 Hz UART" },
+      { label: "Module", value: "Orin Nano 8 GB" },
+      { label: "Compute", value: "40 TOPS INT8" },
+      { label: "Link", value: "CSI + 50 Hz UART" },
     ],
   },
   {
     id: "camera",
-    name: "Global-shutter camera",
+    name: "Vision FSD camera",
     group: "Perception",
     summary:
-      "1/1.8\" global shutter, 60 fps, 6 mm low-distortion glass. Rolling shutter would smear a 90 km/h car across a row.",
-    role: "The only exteroceptive sensor that sees the vehicle. IMU tells the drone how it is oriented; the camera tells it what it is chasing.",
-    fsd: "Each frame is undistorted, then a detector returns class + box. A pinhole + ground-plane (or stereo) lift turns that box into a 3D point.",
+      "Dedicated CSI global-shutter camera on the gimbal. Horizon Vision dropped LiDAR — range comes from pinhole geometry + AGL, not a spinning puck.",
+    role: "The only exteroceptive sensor that sees the vehicle. IMU orients the drone; this camera tells it what it is chasing. camera_link in the Horizon Vision tree.",
+    fsd: "Each frame is undistorted on Orin. Detector returns class + box. Box bottom + drone altitude + calibration lift that box into a 3D chase point.",
     specs: [
-      { label: "Shutter", value: "Global" },
-      { label: "Rate", value: "60 fps · 1920×1080" },
+      { label: "Interface", value: "CSI · global shutter" },
+      { label: "Native", value: "1280×720 · 30–60 fps" },
       { label: "HFOV", value: "70°" },
     ],
   },
@@ -134,7 +134,7 @@ export const PARTS: PartInfo[] = [
     summary:
       "Multi-band GNSS puck raised above the carbon to keep it out of motor current loops. Magnetometer sits in the same module.",
     role: "Absolute position for return-to-home and to pin the EKF when vision is lost. Not fast enough to chase a car by itself.",
-    fsd: "Fusion: GNSS for the drone’s own geodetic pose, vision for the car’s pose relative to the drone. Subtract, and you have a chase vector.",
+    fsd: "Fusion: GNSS for the drone’s own geodetic pose, vision for the car relative to the drone. Subtract — that is the chase vector. No LiDAR in the loop.",
     specs: [
       { label: "Bands", value: "L1 / L2" },
       { label: "CEP", value: "1.2 m (open sky)" },
@@ -193,31 +193,31 @@ export const PIPELINE = [
   {
     id: "capture",
     title: "Capture",
-    body: "Global-shutter frame, IMU-timestamped. Undistort with the calibration model. Extrinsics rotate the ray into the body frame.",
+    body: "CSI global-shutter frame on Orin, IMU-timestamped. Undistort with the calibration model. Extrinsics rotate the ray into the body frame.",
   },
   {
     id: "detect",
     title: "Detect",
-    body: "INT8 detector proposes vehicle boxes. Class score and a minimum box area reject distant clutter and pedestrians.",
+    body: "INT8 detector on the Jetson proposes vehicle boxes. Class score and a minimum box area reject distant clutter.",
   },
   {
     id: "associate",
     title: "Associate",
-    body: "IoU + appearance embedding glue this box to last frame’s track. A new track is born only after two consecutive hits.",
+    body: "IoU + appearance glue this box to last frame’s track. A new track is born only after two consecutive hits.",
   },
   {
     id: "estimate",
     title: "Estimate",
-    body: "Constant-turn Kalman in NED. Measurement is the 3D point from box bottom + drone altitude + pinhole geometry.",
+    body: "Constant-turn Kalman in NED. Range is monocular: box bottom + AGL + pinhole. LiDAR is not in this stack.",
   },
   {
     id: "guide",
     title: "Guide",
-    body: "Setpoint = target − standoff along its velocity, plus a commanded AGL. PD on position error, limited by voltage headroom.",
+    body: "Setpoint = target − standoff along its velocity, plus commanded AGL. UART to PX4. Local map is tracks, not a cloud.",
   },
   {
     id: "actuate",
     title: "Actuate",
-    body: "FC rate loop → mixer → DShot → phase current. Gimbal PIDs keep the predicted box on the optical axis the whole time.",
+    body: "FC rate loop → mixer → DShot. Gimbal PIDs keep the predicted box on the optical axis the whole time.",
   },
 ] as const;

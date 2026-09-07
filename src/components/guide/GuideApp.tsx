@@ -21,7 +21,7 @@ export function GuideApp() {
       engine?.dispose();
       useGuide.getState().setReady(false);
     };
-  }, ["build-view-2"]);
+  }, ["horizon-orin"]);
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-bg">

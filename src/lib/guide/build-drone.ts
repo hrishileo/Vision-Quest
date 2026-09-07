@@ -464,24 +464,54 @@ export function buildDrone(): DroneBuild {
   register("mag", magChip, new THREE.Vector3(0, 0.22, 0));
 
   const npu = new THREE.Group();
-  npu.position.set(0, 0.028, 0);
-  const npuBoard = mesh(
-    share(geos, new THREE.BoxGeometry(0.07, 0.004, 0.07)),
+  npu.position.set(0, 0.032, -0.01);
+  const carrier = mesh(
+    share(geos, new THREE.BoxGeometry(0.092, 0.006, 0.068)),
     mats.pcbDark,
   );
-  const npuChip = mesh(
-    share(geos, new THREE.BoxGeometry(0.024, 0.004, 0.024)),
+  const module = mesh(
+    share(geos, new THREE.BoxGeometry(0.07, 0.004, 0.045)),
     mats.chip,
     0,
-    0.004,
-    0,
+    0.005,
+    -0.004,
   );
-  npu.add(npuBoard, npuChip);
-  const finGeo = share(geos, new THREE.BoxGeometry(0.026, 0.008, 0.0022));
-  for (let i = 0; i < 7; i++) {
-    npu.add(mesh(finGeo, mats.alu, 0, 0.01, -0.012 + i * 0.004));
+  const sink = mesh(
+    share(geos, new THREE.BoxGeometry(0.058, 0.003, 0.038)),
+    mats.alu,
+    0,
+    0.0085,
+    -0.004,
+  );
+  npu.add(carrier, module, sink);
+  const finGeo = share(geos, new THREE.BoxGeometry(0.056, 0.012, 0.0018));
+  for (let i = 0; i < 11; i++) {
+    npu.add(mesh(finGeo, mats.alu, 0, 0.015, -0.02 + i * 0.0036));
   }
-  register("npu", npu, new THREE.Vector3(0, 0.13, 0));
+  const usbc = mesh(
+    share(geos, new THREE.BoxGeometry(0.01, 0.004, 0.014)),
+    mats.steel,
+    0,
+    0.002,
+    -0.038,
+  );
+  const csi = mesh(
+    share(geos, new THREE.BoxGeometry(0.018, 0.003, 0.008)),
+    mats.goldpin,
+    0,
+    0.005,
+    0.032,
+  );
+  const ribbon = mesh(
+    share(geos, new THREE.BoxGeometry(0.012, 0.0012, 0.07)),
+    mats.chip,
+    0,
+    0.01,
+    0.068,
+  );
+  ribbon.rotation.x = -0.18;
+  npu.add(usbc, csi, ribbon);
+  register("npu", npu, new THREE.Vector3(0, 0.14, -0.02));
 
   const batt = new THREE.Group();
   batt.position.set(0, -0.022, 0);

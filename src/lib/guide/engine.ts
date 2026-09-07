@@ -33,6 +33,21 @@ function partIdOf(obj: THREE.Object3D | null | undefined): string | null {
   return null;
 }
 
+function taggedRoot(obj: THREE.Object3D): THREE.Object3D {
+  const id = partIdOf(obj);
+  if (!id) return obj;
+  let o = obj;
+  while (o.parent && o.parent.userData.partId === id) o = o.parent;
+  return o;
+}
+
+function ignorePick(obj: THREE.Object3D) {
+  obj.traverse((o) => {
+    o.userData.helper = true;
+    o.raycast = () => {};
+  });
+}
+
 export class GuideEngine {
   readonly renderer: THREE.WebGLRenderer;
   readonly labels: CSS2DRenderer;
@@ -79,6 +94,7 @@ export class GuideEngine {
   private pointerNdc = new THREE.Vector2();
   private dragging = false;
   private pointerHeld = false;
+  private hoverObj: THREE.Object3D | null = null;
   private down = { x: 0, y: 0 };
   private idle = 0;
   private labelList: Label[] = [];
@@ -212,6 +228,7 @@ export class GuideEngine {
     this.imuAxes = new THREE.AxesHelper(0.045);
     this.drone.imuObject.add(this.imuAxes);
     this.imuAxes.visible = false;
+    ignorePick(this.imuAxes);
 
     this.world = buildWorld();
     this.world.group.visible = false;
@@ -229,7 +246,8 @@ export class GuideEngine {
 
     this.frustum = this.makeFrustum();
     this.frustum.visible = false;
-    this.drone.droneCam.add(this.frustum);
+    this.scene.add(this.frustum);
+    ignorePick(this.frustum);
 
     this.boxHelper = new THREE.BoxHelper(this.drone.group, 0x8fbf9a);
     this.boxHelper.visible = false;
@@ -249,6 +267,7 @@ export class GuideEngine {
     );
     this.lockBeam.visible = false;
     this.scene.add(this.lockBeam);
+    ignorePick(this.lockBeam);
 
     this.predMesh = new THREE.Mesh(
       new THREE.BoxGeometry(1.9, 1.2, 4.6),
@@ -261,8 +280,12 @@ export class GuideEngine {
     );
     this.predMesh.visible = false;
     this.scene.add(this.predMesh);
+    ignorePick(this.predMesh);
 
     this.signalLines = this.makeSignals();
+    this.signalLines.forEach(ignorePick);
+    this.drone.thrustCones.forEach(ignorePick);
+    ignorePick(this.boxHelper);
 
     this.controls = new OrbitControls(this.camera, renderer.domElement);
     this.controls.enableDamping = true;
@@ -320,6 +343,7 @@ export class GuideEngine {
     this.onPointerLeave = () => {
       this.pointerHeld = false;
       this.dragging = false;
+      this.hoverObj = null;
       this.hideTip();
       if (useGuide.getState().hovered) useGuide.getState().setHovered(null);
     };
@@ -611,6 +635,7 @@ export class GuideEngine {
     }
 
     this.updateThrust(s.mode);
+    this.syncFrustum(s.mode);
     this.updateSelection(s.selected, s.hovered);
     this.updateLabels(s);
     this.updateCamera(dt, s.mode, s.camView, s.selected);
@@ -640,6 +665,15 @@ export class GuideEngine {
       this.tourT = 0;
       this.tourIndex = (this.tourIndex + 1) % TOUR_BEATS.length;
     }
+  }
+
+  private syncFrustum(mode: string) {
+    this.drone.droneCam.updateMatrixWorld();
+    this.drone.droneCam.getWorldPosition(_v);
+    this.drone.droneCam.getWorldQuaternion(_q);
+    this.frustum.position.copy(_v);
+    this.frustum.quaternion.copy(_q);
+    this.frustum.scale.setScalar(mode === "pursuit" ? 8 : 1);
   }
 
   private updateThrust(mode: string) {
@@ -863,13 +897,18 @@ export class GuideEngine {
       this.boxHelper.visible = false;
       return;
     }
-    const piece = this.drone.pieces.find((p) => p.id === id);
-    if (!piece) {
+    let obj: THREE.Object3D | null = null;
+    if (this.hoverObj && partIdOf(this.hoverObj) === id) {
+      obj = taggedRoot(this.hoverObj);
+    } else {
+      obj = this.drone.pieces.find((p) => p.id === id)?.object ?? null;
+    }
+    if (!obj) {
       this.boxHelper.visible = false;
       return;
     }
     this.boxHelper.visible = true;
-    this.boxHelper.setFromObject(piece.object);
+    this.boxHelper.setFromObject(obj);
     const color = selected ? 0x8fbf9a : 0xc5cdc8;
     (this.boxHelper.material as THREE.LineBasicMaterial).color.setHex(color);
   }
@@ -918,10 +957,12 @@ export class GuideEngine {
 
   private pickHover(clientX: number, clientY: number) {
     if (this.dragging) {
+      this.hoverObj = null;
       this.hideTip();
       return;
     }
     const hit = this.raycast();
+    this.hoverObj = hit?.object ?? null;
     const part = hit ? partIdOf(hit.object) : null;
     if (useGuide.getState().hovered !== part) useGuide.getState().setHovered(part);
     this.showTip(part, clientX, clientY);
@@ -973,12 +1014,27 @@ export class GuideEngine {
   private raycast(): THREE.Intersection | null {
     _ptr.copy(this.pointerNdc);
     _ray.setFromCamera(_ptr, this.activeCamera());
+    _ray.params.Line = { threshold: 0.004 };
     const objs: THREE.Object3D[] = [this.drone.group];
     if (this.world.group.visible) objs.push(this.world.group);
     const hits = _ray.intersectObjects(objs, true);
-    return (
-      hits.find((h) => partIdOf(h.object) || h.object.userData.carIndex !== undefined) ?? null
-    );
+    for (const h of hits) {
+      if (h.object.userData.helper) continue;
+      if (!(h.object as THREE.Mesh).isMesh) continue;
+      let vis: THREE.Object3D | null = h.object;
+      let hidden = false;
+      while (vis) {
+        if (!vis.visible) {
+          hidden = true;
+          break;
+        }
+        vis = vis.parent;
+      }
+      if (hidden) continue;
+      if (h.object.userData.carIndex !== undefined) return h;
+      if (partIdOf(h.object)) return h;
+    }
+    return null;
   }
 
   private activeCamera() {

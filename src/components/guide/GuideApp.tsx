@@ -21,7 +21,7 @@ export function GuideApp() {
       engine?.dispose();
       useGuide.getState().setReady(false);
     };
-  }, ["cursor-tip-3"]);
+  }, ["pick-parts"]);
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-bg">

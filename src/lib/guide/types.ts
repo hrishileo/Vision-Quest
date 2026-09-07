@@ -1,5 +1,6 @@
 export type Mode = "anatomy" | "controller" | "vision" | "pursuit";
 export type CamView = "orbit" | "chase" | "fpv";
+export type BuildView = "skeleton" | "finished";
 export type LockState = "search" | "acquire" | "track" | "lost";
 
 export type Spec = { label: string; value: string };

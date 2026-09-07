@@ -116,6 +116,7 @@ export class GuideEngine {
   private studioCarPhase = 0;
   private wasTouring = false;
   private lastMode: string = "anatomy";
+  private lastBuild: string = "skeleton";
   private ro: ResizeObserver | null = null;
   private onPointerDown: (e: PointerEvent) => void;
   private onPointerMove: (e: PointerEvent) => void;
@@ -371,6 +372,10 @@ export class GuideEngine {
       if (e.code === "Escape") useGuide.getState().setSelected(null);
       if (e.code === "KeyC") useGuide.getState().toggleCutaway();
       if (e.code === "KeyT") useGuide.getState().toggleTour();
+      if (e.code === "KeyB") {
+        const st = useGuide.getState();
+        st.setBuildView(st.buildView === "finished" ? "skeleton" : "finished");
+      }
     };
 
     window.addEventListener("resize", this.onResize);
@@ -493,6 +498,10 @@ export class GuideEngine {
       this.onModeChange(this.lastMode, s.mode);
       this.lastMode = s.mode;
     }
+    if (s.buildView !== this.lastBuild) {
+      this.lastBuild = s.buildView;
+      if (s.mode !== "pursuit") this.onModeChange(s.mode, s.mode);
+    }
 
     if (s.touring && !s.paused) {
       if (!this.wasTouring) {
@@ -552,12 +561,17 @@ export class GuideEngine {
       }
     }
 
-    const explode = s.mode === "pursuit" ? 0 : s.explode;
+    const explode = this.isDressed(s) ? 0 : s.explode;
     for (const piece of this.drone.pieces) {
       piece.object.position.copy(piece.rest).addScaledVector(piece.explode, explode);
     }
 
-    const shell = s.mode === "pursuit" ? 1 : s.shell;
+    const dressed = this.isDressed(s);
+    this.drone.finishGroup.visible = dressed;
+    const cutPeek = s.cutaway && studio;
+    for (const o of this.drone.skeletonOnly) o.visible = !dressed || cutPeek;
+
+    const shell = dressed ? 1 : s.mode === "pursuit" ? 1 : s.shell;
     for (const m of this.drone.shellMeshes) {
       const mat = m.material as THREE.MeshStandardMaterial;
       mat.transparent = shell < 0.97;
@@ -593,7 +607,7 @@ export class GuideEngine {
       led.emissiveIntensity = 0.55 + Math.sin(t * 5.5) * 0.4;
     }
 
-    const showSignals = studio && explode > 0.28;
+    const showSignals = studio && explode > 0.28 && !dressed;
     for (const line of this.signalLines) {
       const mat = line.material as THREE.LineDashedMaterial;
       const target = showSignals ? 0.4 + Math.sin(t * 4.2) * 0.18 : 0;
@@ -675,12 +689,15 @@ export class GuideEngine {
       this.pitch = 0;
       this.drone.gimbalYaw.rotation.y = 0;
       this.drone.gimbalPitch.rotation.x = to === "controller" ? 0.35 : 0;
+      const dressed = useGuide.getState().buildView === "finished";
       const pos =
         to === "controller"
           ? [0.62, 0.4, 0.78]
           : to === "vision"
             ? [1.22, 0.55, 1.38]
-            : [2.05, 1.18, 2.28];
+            : dressed
+              ? [2.32, 1.28, 2.52]
+              : [2.05, 1.18, 2.28];
       const tgt = to === "vision" ? [0, 0.02, 0.08] : [0, 0.04, 0];
       this.camera.position.set(pos[0]!, pos[1]!, pos[2]!);
       this.controls.target.set(tgt[0]!, tgt[1]!, tgt[2]!);
@@ -691,6 +708,10 @@ export class GuideEngine {
     this.controls.update();
     this.controls.enableDamping = true;
     void from;
+  }
+
+  private isDressed(s: ReturnType<typeof useGuide.getState>) {
+    return s.buildView === "finished" || s.mode === "pursuit";
   }
 
   private advanceTour(dt: number) {

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { CamView, LockState, Mode, Telemetry } from "./types";
+import type { BuildView, CamView, LockState, Mode, Telemetry } from "./types";
 
 const DEFAULT_TELEMETRY: Telemetry = {
   alt: 0,
@@ -31,6 +31,7 @@ type GuideState = {
   paused: boolean;
   touring: boolean;
   camView: CamView;
+  buildView: BuildView;
   standoff: number;
   altitude: number;
   tightness: number;
@@ -48,6 +49,7 @@ type GuideState = {
   toggleTour: () => void;
   setTouring: (v: boolean) => void;
   setCamView: (v: CamView) => void;
+  setBuildView: (v: BuildView) => void;
   setStandoff: (n: number) => void;
   setAltitude: (n: number) => void;
   setTightness: (n: number) => void;
@@ -66,6 +68,7 @@ export const useGuide = create<GuideState>((set) => ({
   paused: false,
   touring: false,
   camView: "orbit",
+  buildView: "skeleton",
   standoff: 9,
   altitude: 7,
   tightness: 0.9,
@@ -115,6 +118,13 @@ export const useGuide = create<GuideState>((set) => ({
     })),
   setTouring: (touring) => set({ touring }),
   setCamView: (camView) => set({ camView }),
+  setBuildView: (buildView) =>
+    set((s) => ({
+      buildView,
+      explode:
+        buildView === "finished" ? 0 : s.explode < 0.1 ? 0.52 : s.explode,
+      cutaway: buildView === "finished" ? false : s.cutaway,
+    })),
   setStandoff: (standoff) => set({ standoff }),
   setAltitude: (altitude) => set({ altitude }),
   setTightness: (tightness) => set({ tightness }),

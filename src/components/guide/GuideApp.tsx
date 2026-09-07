@@ -21,7 +21,7 @@ export function GuideApp() {
       engine?.dispose();
       useGuide.getState().setReady(false);
     };
-  }, ["mode-snap"]);
+  }, ["build-view-2"]);
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-bg">

@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { PIPELINE, PARTS, PART_MAP } from "@/lib/guide/catalog";
 import { LOCK_LABEL, useGuide } from "@/lib/guide/store";
-import { MODES, type CamView } from "@/lib/guide/types";
+import { MODES, type BuildView, type CamView } from "@/lib/guide/types";
 
 function SliderRow({
   label,
@@ -128,6 +128,8 @@ export function Overlay() {
   const toggleTour = useGuide((s) => s.toggleTour);
   const camView = useGuide((s) => s.camView);
   const setCamView = useGuide((s) => s.setCamView);
+  const buildView = useGuide((s) => s.buildView);
+  const setBuildView = useGuide((s) => s.setBuildView);
   const standoff = useGuide((s) => s.standoff);
   const setStandoff = useGuide((s) => s.setStandoff);
   const altitude = useGuide((s) => s.altitude);
@@ -160,8 +162,25 @@ export function Overlay() {
             OSPREY
           </h1>
           <p className="mt-0.5 hidden max-w-sm text-xs text-muted sm:block">
-            Interactive briefing · flight controller · camera lock
+            {buildView === "finished"
+              ? "Finished airframe · assembled product shot"
+              : "Skeleton rig · explode the stack"}
           </p>
+          <div className="mt-2 flex gap-1" role="group" aria-label="Build">
+            {(["skeleton", "finished"] as BuildView[]).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setBuildView(v)}
+                className={
+                  "min-h-9 rounded-sm px-2.5 py-1.5 font-mono text-2xs uppercase tracking-[0.14em] " +
+                  (buildView === v ? "bg-fg text-accent-fg" : "bg-surface text-muted hover:text-fg")
+                }
+              >
+                {v}
+              </button>
+            ))}
+          </div>
         </div>
         <nav
           className="flex max-w-[70%] flex-wrap justify-end gap-1"
@@ -281,7 +300,9 @@ export function Overlay() {
                 <p className="mt-2 text-sm leading-relaxed text-muted">
                   {mode === "pursuit"
                     ? "The NPU holds a Kalman track on the selected car. Click another vehicle to switch lock. Drag to orbit, or switch FPV."
-                    : "Hover a part — the name follows the pointer. Click for the spec sheet. Drag to orbit. Press T to tour."}
+                    : buildView === "finished"
+                      ? "Assembled product shot. Toggle Skeleton to explode the stack. Send part photos and this body gets rebuilt from them."
+                      : "Hover a part — the name follows the pointer. Click for the spec sheet. Drag to orbit. Press T to tour."}
                 </p>
               </>
             )}
@@ -417,6 +438,16 @@ export function Overlay() {
                 onChange={setTightness}
               />
             </>
+          ) : buildView === "finished" ? (
+            <SliderRow
+              label="Prop RPM"
+              value={rpm}
+              min={0}
+              max={9000}
+              step={50}
+              display={`${Math.round(rpm)}`}
+              onChange={setRpm}
+            />
           ) : (
             <>
               <SliderRow

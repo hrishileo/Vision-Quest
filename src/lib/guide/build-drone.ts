@@ -25,6 +25,8 @@ export type DroneBuild = {
   clipMeshes: THREE.Mesh[];
   ledMats: THREE.MeshStandardMaterial[];
   imuObject: THREE.Object3D;
+  finishGroup: THREE.Group;
+  skeletonOnly: THREE.Object3D[];
   materials: THREE.Material[];
   textures: THREE.Texture[];
   geometries: THREE.BufferGeometry[];
@@ -49,6 +51,8 @@ type Mats = {
   plastic: THREE.MeshStandardMaterial;
   goldpin: THREE.MeshStandardMaterial;
   ceramic: THREE.MeshStandardMaterial;
+  paint: THREE.MeshStandardMaterial;
+  accent: THREE.MeshStandardMaterial;
   lens: THREE.MeshPhysicalMaterial;
 };
 
@@ -173,6 +177,18 @@ export function buildDrone(): DroneBuild {
       color: 0xd8d4cc,
       roughness: 0.45,
       metalness: 0.05,
+    }),
+    paint: new THREE.MeshStandardMaterial({
+      color: 0x16181c,
+      roughness: 0.38,
+      metalness: 0.22,
+    }),
+    accent: new THREE.MeshStandardMaterial({
+      color: 0x8fbf9a,
+      roughness: 0.32,
+      metalness: 0.4,
+      emissive: 0x8fbf9a,
+      emissiveIntensity: 0.18,
     }),
     lens: new THREE.MeshPhysicalMaterial({
       color: 0x0a1220,
@@ -604,6 +620,86 @@ export function buildDrone(): DroneBuild {
     explode: new THREE.Vector3(0, 0, 0.08),
   });
 
+  const finishGroup = new THREE.Group();
+  finishGroup.name = "finish-body";
+  finishGroup.visible = false;
+
+  const canopy = mesh(
+    share(geos, new THREE.BoxGeometry(0.188, 0.024, 0.176)),
+    mats.paint,
+    0,
+    0.056,
+    -0.006,
+  );
+  const canopyCap = mesh(
+    share(geos, new THREE.BoxGeometry(0.168, 0.01, 0.148)),
+    mats.carbon,
+    0,
+    0.072,
+    -0.01,
+  );
+  const stripe = mesh(
+    share(geos, new THREE.BoxGeometry(0.188, 0.002, 0.01)),
+    mats.accent,
+    0,
+    0.069,
+    0.06,
+  );
+  const chin = mesh(
+    share(geos, new THREE.BoxGeometry(0.072, 0.018, 0.04)),
+    mats.paint,
+    0,
+    0.012,
+    0.102,
+  );
+  tag(chin, "camera");
+  const belly = mesh(
+    share(geos, new THREE.BoxGeometry(0.16, 0.014, 0.12)),
+    mats.paint,
+    0,
+    -0.048,
+    0,
+  );
+  const gpsPuck = mesh(
+    share(geos, new THREE.CylinderGeometry(0.02, 0.022, 0.01, 20)),
+    mats.plastic,
+    0,
+    0.082,
+    -0.04,
+  );
+  tag(gpsPuck, "gps");
+  const gpsDisk = mesh(
+    share(geos, new THREE.CylinderGeometry(0.016, 0.016, 0.003, 20)),
+    mats.ceramic,
+    0,
+    0.088,
+    -0.04,
+  );
+  tag(gpsDisk, "gps");
+  finishGroup.add(canopy, canopyCap, stripe, chin, belly, gpsPuck, gpsDisk);
+  clipMeshes.push(canopy, canopyCap, belly, chin);
+
+  const sleeveGeo = share(geos, new THREE.BoxGeometry(0.044, 0.016, 0.15));
+  const cowlGeo = share(geos, new THREE.CylinderGeometry(0.026, 0.028, 0.01, 20));
+  for (const arm of arms) {
+    const dirX = Math.sin(arm.θ);
+    const dirZ = Math.cos(arm.θ);
+    const sleeve = mesh(sleeveGeo, mats.paint);
+    sleeve.position.set(dirX * ARM * 0.42, 0.01, dirZ * ARM * 0.42);
+    sleeve.rotation.y = arm.θ;
+    const cowl = mesh(cowlGeo, mats.steel, dirX * ARM, MOTOR_Z - 0.01, dirZ * ARM);
+    tag(sleeve, "frame");
+    tag(cowl, "motors");
+    finishGroup.add(sleeve, cowl);
+    clipMeshes.push(sleeve);
+  }
+  group.add(finishGroup);
+
+  const hideIds = new Set(["fc", "imu", "npu", "mag", "escs", "gps", "rx"]);
+  const skeletonOnly = pieces
+    .filter((p) => hideIds.has(p.id))
+    .map((p) => p.object);
+
   return {
     group,
     pieces,
@@ -617,6 +713,8 @@ export function buildDrone(): DroneBuild {
     clipMeshes,
     ledMats,
     imuObject,
+    finishGroup,
+    skeletonOnly,
     materials,
     textures,
     geometries: geos,

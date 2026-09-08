@@ -7,10 +7,13 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { buildDrone, type DroneBuild } from "./build-drone";
+import { buildBlueprint, setBlueprintVisible, type Blueprint } from "./blueprint";
 import { buildWorld, makeStudioCar, trackPoint, trackTangent, type WorldBuild } from "./build-world";
 import { PART_MAP } from "./catalog";
+import { kitLabel } from "@/lib/bom";
 import { TOUR_BEATS, useGuide } from "./store";
 import type { BBox, LockState, Telemetry } from "./types";
+import { Y } from "./specs";
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -101,6 +104,7 @@ export class GuideEngine {
   private tip: HTMLDivElement;
   private tipGroup: HTMLSpanElement;
   private tipName: HTMLSpanElement;
+  private tipSku: HTMLSpanElement;
   private envTex: THREE.Texture;
   private hemi: THREE.HemisphereLight;
   private key: THREE.DirectionalLight;
@@ -117,6 +121,12 @@ export class GuideEngine {
   private wasTouring = false;
   private lastMode: string = "anatomy";
   private lastBuild: string = "skeleton";
+  private blueprint: Blueprint;
+  private blueprintOn = false;
+  private bpClones: THREE.Material[] = [];
+  private studioGrid: THREE.GridHelper;
+  private studioDisc: THREE.Mesh;
+  private bpGrid: THREE.GridHelper;
   private ro: ResizeObserver | null = null;
   private onPointerDown: (e: PointerEvent) => void;
   private onPointerMove: (e: PointerEvent) => void;
@@ -167,7 +177,9 @@ export class GuideEngine {
     this.tipGroup.className = "part-tip-k";
     this.tipName = document.createElement("span");
     this.tipName.className = "part-tip-n";
-    this.tip.append(this.tipGroup, this.tipName);
+    this.tipSku = document.createElement("span");
+    this.tipSku.className = "part-tip-s";
+    this.tip.append(this.tipGroup, this.tipName, this.tipSku);
     (host.parentElement ?? host).appendChild(this.tip);
 
     this.scene = new THREE.Scene();
@@ -182,7 +194,7 @@ export class GuideEngine {
       0.04,
       200,
     );
-    this.camera.position.set(2.05, 1.18, 2.28);
+    this.camera.position.set(2.45, 1.42, 2.65);
 
     const pmrem = new THREE.PMREMGenerator(renderer);
     this.envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -210,6 +222,7 @@ export class GuideEngine {
     this.studio = new THREE.Group();
     const grid = new THREE.GridHelper(4.2, 42, 0x3a3e46, 0x1c1e24);
     grid.position.y = -0.046;
+    this.studioGrid = grid;
     this.studio.add(grid);
     const discGeo = new THREE.CircleGeometry(1.7, 64);
     const discMat = new THREE.MeshStandardMaterial({
@@ -221,11 +234,19 @@ export class GuideEngine {
     disc.rotation.x = -Math.PI / 2;
     disc.position.y = -0.045;
     disc.receiveShadow = true;
+    this.studioDisc = disc;
     this.studio.add(disc);
+    const bpGrid = new THREE.GridHelper(4.2, 84, 0x8fbf9a, 0x163028);
+    bpGrid.position.y = -0.044;
+    bpGrid.visible = false;
+    this.bpGrid = bpGrid;
+    this.studio.add(bpGrid);
     this.scene.add(this.studio);
 
     this.drone = buildDrone();
     this.scene.add(this.drone.group);
+    this.blueprint = buildBlueprint(this.drone);
+    setBlueprintVisible(this.blueprint, false);
 
     this.imuAxes = new THREE.AxesHelper(0.045);
     this.drone.imuObject.add(this.imuAxes);
@@ -292,12 +313,12 @@ export class GuideEngine {
     this.controls = new OrbitControls(this.camera, renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.minDistance = 0.85;
+    this.controls.minDistance = 0.28;
     this.controls.maxDistance = 48;
     this.controls.target.set(0, 0.04, 0);
     this.controls.autoRotate = false;
     this.controls.autoRotateSpeed = 0.45;
-    this.controls.maxPolarAngle = Math.PI * 0.48;
+    this.controls.maxPolarAngle = Math.PI * 0.92;
 
     if (this.useBloom) {
       const composer = new EffectComposer(renderer);
@@ -371,10 +392,14 @@ export class GuideEngine {
       }
       if (e.code === "Escape") useGuide.getState().setSelected(null);
       if (e.code === "KeyC") useGuide.getState().toggleCutaway();
+      if (e.code === "KeyE") useGuide.getState().toggleExplode();
+      if (e.code === "KeyX") useGuide.getState().toggleShell();
       if (e.code === "KeyT") useGuide.getState().toggleTour();
       if (e.code === "KeyB") {
         const st = useGuide.getState();
-        st.setBuildView(st.buildView === "finished" ? "skeleton" : "finished");
+        const order = ["skeleton", "finished", "kit"] as const;
+        const i = order.indexOf(st.buildView);
+        st.setBuildView(order[(i + 1) % order.length]!);
       }
     };
 
@@ -429,10 +454,10 @@ export class GuideEngine {
 
   private makeSignals(): THREE.Line[] {
     const paths: THREE.Vector3[][] = [
-      [new THREE.Vector3(0, -0.022, 0), new THREE.Vector3(0, 0.008, 0)],
-      [new THREE.Vector3(0, 0.008, 0), new THREE.Vector3(0, 0.018, 0)],
-      [new THREE.Vector3(0, 0.018, 0), new THREE.Vector3(0, 0.028, 0)],
-      [new THREE.Vector3(0, 0.028, 0), new THREE.Vector3(0, -0.01, 0.095)],
+      [new THREE.Vector3(0, Y.batt, 0), new THREE.Vector3(0, Y.esc, 0)],
+      [new THREE.Vector3(0, Y.esc, 0), new THREE.Vector3(0, Y.fc, 0)],
+      [new THREE.Vector3(0, Y.fc, 0), new THREE.Vector3(0, Y.orin, -0.03)],
+      [new THREE.Vector3(0, Y.orin, -0.03), new THREE.Vector3(0, Y.gimbal, 0.145)],
     ];
     const lines: THREE.Line[] = [];
     for (const pts of paths) {
@@ -459,9 +484,14 @@ export class GuideEngine {
       seen.add(piece.id);
       const info = PART_MAP[piece.id];
       if (!info) continue;
+      const kit = kitLabel(piece.id);
       const el = document.createElement("div");
-      el.className = "anno";
-      el.textContent = info.name;
+      el.className = "anno anno-title";
+      const name = document.createElement("span");
+      name.textContent = kit.title;
+      const sku = document.createElement("span");
+      sku.textContent = kit.sku || info.name;
+      el.append(name, sku);
       const obj = new CSS2DObject(el);
       obj.position.set(0, 0.03, 0);
       obj.visible = false;
@@ -513,6 +543,8 @@ export class GuideEngine {
     this.wasTouring = s.touring;
 
     const studio = s.mode !== "pursuit";
+    this.applyBlueprint(studio && s.mode === "anatomy" && s.buildView === "skeleton");
+
     this.studio.visible = studio;
     this.world.group.visible = !studio;
     this.studioCar.visible = s.mode === "vision";
@@ -522,6 +554,8 @@ export class GuideEngine {
     this.hemi.intensity = studio ? 1.05 : 0.5;
     this.key.intensity = studio ? 2.8 : 1.45;
     this.key.position.set(studio ? 3.2 : 18, studio ? 4.4 : 22, studio ? 2.2 : 8);
+    this.rim.intensity = 0.85;
+    if (this.bloomPass) this.bloomPass.strength = 0.38;
     this.controls.autoRotate =
       !this.reduced &&
       studio &&
@@ -529,7 +563,7 @@ export class GuideEngine {
       this.idle > 3.5 &&
       !this.dragging &&
       !s.selected;
-    this.controls.enabled = s.camView === "orbit";
+    this.controls.enabled = s.camView === "orbit" && s.buildView !== "kit";
     this.controls.enableRotate = s.camView === "orbit";
     this.controls.enablePan = s.camView === "orbit";
     this.controls.enableZoom = s.camView !== "fpv";
@@ -561,22 +595,30 @@ export class GuideEngine {
       }
     }
 
-    const explode = this.isDressed(s) ? 0 : s.explode;
+    const explode = s.mode === "pursuit" ? 0 : s.explode;
     for (const piece of this.drone.pieces) {
       piece.object.position.copy(piece.rest).addScaledVector(piece.explode, explode);
     }
 
-    const dressed = this.isDressed(s);
-    this.drone.finishGroup.visible = dressed;
-    const cutPeek = s.cutaway && studio;
-    for (const o of this.drone.skeletonOnly) o.visible = !dressed || cutPeek;
+    this.drone.finishGroup.visible = false;
+    for (const o of this.drone.skeletonOnly) o.visible = true;
 
-    const shell = dressed ? 1 : s.mode === "pursuit" ? 1 : s.shell;
+    const shell = s.mode === "pursuit" ? 1 : s.shell;
     for (const m of this.drone.shellMeshes) {
       const mat = m.material as THREE.MeshStandardMaterial;
       mat.transparent = shell < 0.97;
       mat.opacity = shell;
       mat.depthWrite = shell > 0.6;
+    }
+    if (this.blueprintOn) {
+      this.blueprint.dims.visible = s.explode < 0.18;
+      const focus = s.selected ?? s.hovered;
+      for (const b of this.blueprint.balloons) {
+        const on = focus === b.id;
+        b.obj.visible = on && s.explode < 0.18;
+        b.el.classList.toggle("is-active", on);
+        b.skuEl.hidden = !on;
+      }
     }
 
     const cut = s.cutaway && studio;
@@ -607,7 +649,7 @@ export class GuideEngine {
       led.emissiveIntensity = 0.55 + Math.sin(t * 5.5) * 0.4;
     }
 
-    const showSignals = studio && explode > 0.28 && !dressed;
+    const showSignals = studio && explode > 0.28;
     for (const line of this.signalLines) {
       const mat = line.material as THREE.LineDashedMaterial;
       const target = showSignals ? 0.4 + Math.sin(t * 4.2) * 0.18 : 0;
@@ -689,19 +731,16 @@ export class GuideEngine {
       this.pitch = 0;
       this.drone.gimbalYaw.rotation.y = 0;
       this.drone.gimbalPitch.rotation.x = to === "controller" ? 0.35 : 0;
-      const dressed = useGuide.getState().buildView === "finished";
       const pos =
         to === "controller"
-          ? [0.62, 0.4, 0.78]
+          ? [0.72, 0.48, 0.88]
           : to === "vision"
-            ? [1.22, 0.55, 1.38]
-            : dressed
-              ? [2.32, 1.28, 2.52]
-              : [2.05, 1.18, 2.28];
+            ? [1.35, 0.62, 1.52]
+            : [2.45, 1.42, 2.65];
       const tgt = to === "vision" ? [0, 0.02, 0.08] : [0, 0.04, 0];
       this.camera.position.set(pos[0]!, pos[1]!, pos[2]!);
       this.controls.target.set(tgt[0]!, tgt[1]!, tgt[2]!);
-      this.controls.minDistance = to === "controller" ? 0.18 : 0.22;
+      this.controls.minDistance = to === "controller" ? 0.18 : 0.28;
       this.controls.maxDistance = 12;
     }
     this.controls.enableDamping = false;
@@ -710,8 +749,52 @@ export class GuideEngine {
     void from;
   }
 
-  private isDressed(s: ReturnType<typeof useGuide.getState>) {
-    return s.buildView === "finished" || s.mode === "pursuit";
+  private applyBlueprint(on: boolean) {
+    if (on === this.blueprintOn) return;
+    this.blueprintOn = on;
+    setBlueprintVisible(this.blueprint, on);
+    this.bpGrid.visible = on;
+    this.studioGrid.visible = !on;
+
+    const discMat = this.studioDisc.material as THREE.MeshStandardMaterial;
+    discMat.color.setHex(on ? 0x12181a : 0x1a1d24);
+    discMat.emissive.setHex(on ? 0x8fbf9a : 0x000000);
+    discMat.emissiveIntensity = on ? 0.06 : 0;
+
+    if (on) {
+      this.drone.group.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry) return;
+        if (mesh.userData.helper || mesh.userData.blueprintEdge) return;
+        const orig = mesh.material;
+        if (!orig || Array.isArray(orig)) return;
+        if (!(orig instanceof THREE.MeshStandardMaterial) && !(orig instanceof THREE.MeshPhysicalMaterial)) {
+          return;
+        }
+        mesh.userData._bpOrig = orig;
+        const clone = orig.clone();
+        this.bpClones.push(clone);
+        clone.emissive.setHex(0x8fbf9a);
+        clone.emissiveIntensity = Math.max(clone.emissiveIntensity, 0.08);
+        clone.envMapIntensity = 0.45;
+        mesh.material = clone;
+      });
+    } else {
+      this.drone.group.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const orig = mesh.userData._bpOrig as THREE.Material | undefined;
+        if (orig) {
+          mesh.material = orig;
+          mesh.userData._bpOrig = undefined;
+        }
+      });
+      for (const m of this.bpClones) m.dispose();
+      this.bpClones = [];
+    }
+
+    this.renderer.toneMappingExposure = on ? 1.05 : this.useBloom ? 0.92 : 1.15;
+    this.studioFog.color.setHex(on ? 0x0c1214 : 0x0a0b0d);
   }
 
   private advanceTour(dt: number) {
@@ -736,10 +819,21 @@ export class GuideEngine {
   private syncFrustum(mode: string) {
     this.drone.droneCam.updateMatrixWorld();
     this.drone.droneCam.getWorldPosition(_v);
-    this.drone.droneCam.getWorldQuaternion(_q);
     this.frustum.position.copy(_v);
-    this.frustum.quaternion.copy(_q);
-    this.frustum.scale.setScalar(mode === "pursuit" ? 8 : 1);
+    if (mode === "vision") {
+      _v2.copy(this.studioCar.position);
+      _v2.y += 0.12;
+    } else if (mode === "pursuit") {
+      const car = this.world.cars[this.targetIndex] ?? this.world.cars[0]!;
+      _v2.copy(car.group.position);
+      _v2.y = 0.8;
+    } else {
+      this.drone.droneCam.getWorldDirection(_v3);
+      _v2.copy(_v).addScaledVector(_v3, 1.2);
+    }
+    this.frustum.up.set(0, 1, 0);
+    this.frustum.lookAt(_v2);
+    this.frustum.scale.setScalar(mode === "pursuit" ? 2.4 : mode === "vision" ? 1.35 : 1);
   }
 
   private updateThrust(mode: string) {
@@ -938,7 +1032,7 @@ export class GuideEngine {
     this.predMesh.rotation.copy(car.group.rotation);
 
     this.lockBeam.visible = this.lock === "track" || this.lock === "acquire";
-    if (this.lockBeam.visible) this.placeBeam(this.dronePos, tgt.clone().setY(0.8));
+    if (this.lockBeam.visible) this.placeBeam(gPos, tgt.clone().setY(0.8));
     this.frustum.visible = true;
     this.frustum.scale.setScalar(8);
     this.pipelineStep =
@@ -980,11 +1074,13 @@ export class GuideEngine {
   }
 
   private updateLabels(s: ReturnType<typeof useGuide.getState>) {
+    const hide =
+      s.buildView === "kit" || s.mode === "pursuit" || s.camView === "fpv";
     for (const lab of this.labelList) {
-      lab.obj.visible = false;
-      lab.el.classList.remove("is-active");
+      const focus = s.hovered === lab.id || s.selected === lab.id;
+      lab.obj.visible = !hide && focus;
+      lab.el.classList.toggle("is-active", s.selected === lab.id);
     }
-    void s;
   }
 
   private updateCamera(dt: number, mode: string, camView: string, selected: string | null) {
@@ -1015,14 +1111,14 @@ export class GuideEngine {
       this.controls.target.lerp(new THREE.Vector3(0, 0.02, 0.08), 1 - Math.exp(-2 * dt));
     } else if (mode === "anatomy") {
       this.controls.target.lerp(new THREE.Vector3(0, 0.03, 0), 1 - Math.exp(-1.6 * dt));
-      this.controls.minDistance = 0.22;
+      this.controls.minDistance = 0.28;
     } else {
       this.controls.minDistance = 1.2;
     }
   }
 
   private pickHover(clientX: number, clientY: number) {
-    if (this.dragging) {
+    if (this.dragging || useGuide.getState().buildView === "kit") {
       this.hoverObj = null;
       this.hideTip();
       return;
@@ -1035,13 +1131,16 @@ export class GuideEngine {
   }
 
   private showTip(id: string | null, clientX: number, clientY: number) {
-    const info = id && useGuide.getState().camView !== "fpv" ? PART_MAP[id] : undefined;
-    if (!info) {
+    if (!id || useGuide.getState().camView === "fpv") {
       this.hideTip();
       return;
     }
-    this.tipGroup.textContent = info.group;
-    this.tipName.textContent = info.name;
+    const kit = kitLabel(id);
+    const info = PART_MAP[id];
+    this.tipGroup.textContent = kit.brand || kit.group || info?.group || "";
+    this.tipName.textContent = kit.title || info?.name || id;
+    this.tipSku.textContent = kit.sku && kit.sku !== kit.title ? kit.sku : "";
+    this.tipSku.hidden = !this.tipSku.textContent;
     this.tip.hidden = false;
     const rect = this.host.getBoundingClientRect();
     const x = clientX - rect.left;
@@ -1202,6 +1301,10 @@ export class GuideEngine {
     this.world.materials.forEach((m) => m.dispose());
     this.world.textures.forEach((t) => t.dispose());
     this.envTex.dispose();
+    this.blueprint.geos.forEach((g) => g.dispose());
+    this.blueprint.mats.forEach((m) => m.dispose());
+    this.blueprint.els.forEach((el) => el.remove());
+    this.bpClones.forEach((m) => m.dispose());
     const studioGeos = this.studioCar.userData.geos as THREE.BufferGeometry[] | undefined;
     studioGeos?.forEach((g) => g.dispose());
     const studioMats = this.studioCar.userData.mats as THREE.Material[] | undefined;

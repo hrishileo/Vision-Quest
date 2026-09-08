@@ -1,4 +1,6 @@
 {
   "title": "Vision Quest · Horizon Vision",
-  "card": "custom"
+  "type": "website",
+  "card": "custom",
+  "description": "Interactive 3D briefing for the Horizon Vision HV-1 OSPREY 650 mm vision-FSD pursuit drone — carbon X-quad, PX4, Jetson Orin, camera lock."
 }

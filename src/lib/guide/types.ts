@@ -1,6 +1,6 @@
 export type Mode = "anatomy" | "controller" | "vision" | "pursuit";
 export type CamView = "orbit" | "chase" | "fpv";
-export type BuildView = "skeleton" | "finished";
+export type BuildView = "skeleton" | "finished" | "kit";
 export type LockState = "search" | "acquire" | "track" | "lost";
 
 export type Spec = { label: string; value: string };
@@ -40,6 +40,12 @@ export type Telemetry = {
   pipelineStep: number;
   bbox: BBox | null;
 };
+
+export const BUILD_VIEWS: { id: BuildView; label: string }[] = [
+  { id: "skeleton", label: "Skeleton" },
+  { id: "finished", label: "Finished" },
+  { id: "kit", label: "Kit" },
+];
 
 export const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "anatomy", label: "Airframe", hint: "Exploded assembly" },

@@ -6,13 +6,13 @@ export const PARTS: PartInfo[] = [
     name: "Carbon airframe",
     group: "Structure",
     summary:
-      "Unidirectional carbon X-frame. The plates sandwich the avionics stack; arms carry motor thrust into the center of mass.",
+      "HV-1 OSPREY custom carbon chassis. Creo osprey plates, 24 × 10 mm I-beam arms, 6061 folding knuckles, 19 × 19 motor bulkheads, dual Ø10 payload rails. Designed around the kit stack — Pixhawk 6C Mini, Orin tray, Tattu 6S, Tarot T-2D.",
     role: "Keeps motors, camera, and batteries in a rigid, known geometry so the flight controller’s mixing matrix stays valid.",
     fsd: "Vision guidance assumes a fixed camera-to-IMU extrinsics. A flexing frame injects phantom accelerations and ruins lock.",
     specs: [
-      { label: "Layout", value: "X · 650 mm" },
-      { label: "Layup", value: "3K twill / UD spar" },
-      { label: "AUW target", value: "1.85 kg" },
+      { label: "Wheelbase", value: "650 mm true-X" },
+      { label: "Plates", value: "152 × 218 × 2.5 mm 3K" },
+      { label: "Arms", value: "24 × 10 mm CF I-beam" },
     ],
   },
   {
@@ -20,13 +20,13 @@ export const PARTS: PartInfo[] = [
     name: "Brushless outrunners",
     group: "Propulsion",
     summary:
-      "Four 3115-class outrunners. The copper stator is fixed to the arm; the bell and magnets spin with the propeller.",
+      "Four Hobbywing XRotor 3115 900 Kv. Φ37.2 × 32 mm can, 12N14P, M5 shaft, 19 mm M3 pattern. Stator is 31 × 15 mm.",
     role: "Convert DShot throttle into thrust and yaw torque. Opposite motors share rotation direction so yaw is differential RPM.",
     fsd: "The mixer maps body-rate PID output onto these four thrusts. Tracking a car is just a moving position setpoint into that inner loop.",
     specs: [
-      { label: "Kv", value: "900" },
-      { label: "Stator", value: "31 × 15 mm" },
-      { label: "Peak", value: "1.6 kgf / axis" },
+      { label: "Size", value: "Φ37.2 × 32 mm" },
+      { label: "Kv / poles", value: "900 · 14P" },
+      { label: "Peak", value: "5.2 kgf / axis" },
     ],
   },
   {
@@ -34,11 +34,11 @@ export const PARTS: PartInfo[] = [
     name: "Carbon propellers",
     group: "Propulsion",
     summary:
-      "10-inch two-blade carbon. CW / CCW pairs cancel reaction torque in hover so the airframe does not spin.",
+      "HQProp 10 × 5.5 × 2 carbon. Ø254 mm disk, M5 hub. CW / CCW pairs cancel reaction torque in hover so the airframe does not spin.",
     role: "The only surface that makes force. Tip speed and pitch set the thrust curve the mixer linearises around hover.",
     fsd: "Hard yaw while panning the gimbal is limited by prop inertia. FSD keeps yaw-rate commands inside the linear region.",
     specs: [
-      { label: "Diameter", value: "10 in" },
+      { label: "Diameter", value: "Ø254 mm" },
       { label: "Pitch", value: "5.5 in" },
       { label: "Pairing", value: "CW · CCW · CW · CCW" },
     ],
@@ -48,13 +48,13 @@ export const PARTS: PartInfo[] = [
     name: "4-in-1 ESC",
     group: "Propulsion",
     summary:
-      "A single four-channel board under the flight controller. Each MOSFET bridge commutates one motor from the LiPo rail.",
+      "Hobbywing XRotor 45 A 4-in-1, 45.6 × 44 × 8 mm under the Pixhawk. Each MOSFET bridge commutates one 3115 from the 6S rail.",
     role: "Translates digital DShot packets into timed phase currents. Also reports eRPM and current back to the FC.",
     fsd: "Current feedback lets the position controller know when a motor is saturating — the tracker then sheds lateral acceleration instead of spinning out.",
     specs: [
-      { label: "Protocol", value: "DShot600" },
+      { label: "Board", value: "45.6 × 44 × 8 mm" },
       { label: "Continuous", value: "45 A / motor" },
-      { label: "Telemetry", value: "eRPM · A · °C" },
+      { label: "Protocol", value: "DShot600" },
     ],
   },
   {
@@ -62,13 +62,13 @@ export const PARTS: PartInfo[] = [
     name: "Flight controller",
     group: "Avionics",
     summary:
-      "STM32H7 running a PX4-class stack. Gyro at 4 kHz, attitude at 1 kHz, position at 100 Hz. This is the inner-loop computer.",
+      "Holybro Pixhawk 6C Mini Model A — 54.3 × 39 × 17.5 mm, 42 g. STM32H743, BMI088 + ICM-42688-P, PX4 1.15.",
     role: "Fuses IMU, baro, mag, and GPS; runs rate and angle PIDs; mixes onto four motors. Companion vision never writes motors directly.",
     fsd: "Horizon Vision never writes motors. Orin sends a NED setpoint at 50 Hz. The FC is last authority: if vision drops, attitude still holds.",
     specs: [
+      { label: "Envelope", value: "54.3 × 39 × 17.5 mm" },
       { label: "MCU", value: "STM32H743" },
-      { label: "Gyro", value: "4 kHz BMI088" },
-      { label: "Firmware", value: "PX4 1.15" },
+      { label: "Mass", value: "42.4 g" },
     ],
   },
   {
@@ -76,13 +76,13 @@ export const PARTS: PartInfo[] = [
     name: "IMU · gyro + accel",
     group: "Avionics",
     summary:
-      "BMI088 six-axis. The gyro is the truth for body rate; the accelerometer observes gravity and linear acceleration.",
+      "Bosch BMI088 on the 6C Mini. Gyro is body-rate truth; accel observes gravity. The printed HV-1-CAM-01 plate is the rigid camera_link.",
     role: "A complementary / EKF attitude estimator integrates gyro and corrects with accel so tilt does not drift.",
     fsd: "Camera timestamps are interpolated on IMU time. Without that, a 20 ms skew at 15 m/s is 30 cm of lock error.",
     specs: [
-      { label: "Gyro range", value: "±2000 °/s" },
+      { label: "Gyro", value: "±2000 °/s" },
       { label: "Accel", value: "±24 g" },
-      { label: "Noise", value: "0.004 °/s/√Hz" },
+      { label: "Rate", value: "4 kHz" },
     ],
   },
   {
@@ -90,13 +90,13 @@ export const PARTS: PartInfo[] = [
     name: "Jetson Orin Nano",
     group: "Perception",
     summary:
-      "NVIDIA Jetson Orin Nano — Horizon Vision’s edge computer. Detector, tracker, and local map run here. LiDAR is off the stack; the camera is the only scene sensor.",
+      "Orin Nano 8 GB module (69.6 × 45 mm) on a compact carrier, sitting in the printed 90 × 70 mm tray on the X650 rails. Not the desktop Super kit.",
     role: "Turns CSI frames into a 3D target state (position, velocity, covariance) in the NED frame the FC already uses. UART / Ethernet passenger — it never drives MOSFETs.",
     fsd: "This is the FSD brain: detect vehicles, pick one, keep a Kalman lock, emit a pursuit setpoint. Fail-closed: no packet, no setpoint. Local map is built from tracks, not a point cloud.",
     specs: [
-      { label: "Module", value: "Orin Nano 8 GB" },
+      { label: "Module", value: "69.6 × 45 mm" },
+      { label: "Tray", value: "90 × 70 × 8 mm" },
       { label: "Compute", value: "40 TOPS INT8" },
-      { label: "Link", value: "CSI + 50 Hz UART" },
     ],
   },
   {
@@ -104,13 +104,13 @@ export const PARTS: PartInfo[] = [
     name: "Vision FSD camera",
     group: "Perception",
     summary:
-      "Dedicated CSI global-shutter camera on the gimbal. Horizon Vision dropped LiDAR — range comes from pinhole geometry + AGL, not a spinning puck.",
+      "Arducam B0429 AR0234 global shutter, 38 × 38 mm board, M12 barrel. CSI into Orin. Horizon Vision dropped LiDAR — range is pinhole + AGL.",
     role: "The only exteroceptive sensor that sees the vehicle. IMU orients the drone; this camera tells it what it is chasing. camera_link in the Horizon Vision tree.",
     fsd: "Each frame is undistorted on Orin. Detector returns class + box. Box bottom + drone altitude + calibration lift that box into a 3D chase point.",
     specs: [
-      { label: "Interface", value: "CSI · global shutter" },
-      { label: "Native", value: "1280×720 · 30–60 fps" },
-      { label: "HFOV", value: "70°" },
+      { label: "Board", value: "38 × 38 mm" },
+      { label: "Shutter", value: "AR0234 global" },
+      { label: "HFOV", value: "70° class" },
     ],
   },
   {
@@ -118,13 +118,13 @@ export const PARTS: PartInfo[] = [
     name: "Two-axis gimbal",
     group: "Perception",
     summary:
-      "Yaw-pitch brushless gimbal with its own IMU. It isolates the camera from airframe pitch so the detector sees a stable horizon.",
+      "Tarot T-2D class yaw-pitch, ~60 × 75 × 100 mm, with the printed HV-1-GIM-03 adapter for the 38 mm CSI board instead of a GoPro.",
     role: "Keeps the target near the optical centre. Pixel error is a cheap, high-rate measurement the tracker loves.",
     fsd: "Gimbal PIDs run at 1 kHz on pixel error from the predicted box. The airframe still does the heavy translation; the gimbal does the look.",
     specs: [
-      { label: "Axes", value: "Yaw + pitch" },
+      { label: "Envelope", value: "~60 × 75 × 100 mm" },
       { label: "Travel", value: "±110° / −90…+30°" },
-      { label: "Follow", value: "Pixel closed-loop" },
+      { label: "Adapter", value: "32 × 32 × 3 mm" },
     ],
   },
   {
@@ -132,13 +132,13 @@ export const PARTS: PartInfo[] = [
     name: "GNSS + compass mast",
     group: "Navigation",
     summary:
-      "Multi-band GNSS puck raised above the carbon to keep it out of motor current loops. Magnetometer sits in the same module.",
+      "Holybro H-RTK F9P helical. Board 51.1 × 35 × 22.9 mm, antenna Ø27.5 × 59 mm, on an 80 mm mast through the printed TPU collar.",
     role: "Absolute position for return-to-home and to pin the EKF when vision is lost. Not fast enough to chase a car by itself.",
     fsd: "Fusion: GNSS for the drone’s own geodetic pose, vision for the car relative to the drone. Subtract — that is the chase vector. No LiDAR in the loop.",
     specs: [
-      { label: "Bands", value: "L1 / L2" },
-      { label: "CEP", value: "1.2 m (open sky)" },
-      { label: "Update", value: "10 Hz" },
+      { label: "Helix", value: "Ø27.5 × 59 mm" },
+      { label: "Mast", value: "80 mm" },
+      { label: "CEP", value: "1.5 m PVT" },
     ],
   },
   {
@@ -146,7 +146,7 @@ export const PARTS: PartInfo[] = [
     name: "Magnetometer",
     group: "Navigation",
     summary:
-      "3-axis mag in the GPS mast, far from the ESC current. Heading lock when GNSS yaw is poor — hover, or a slow orbit.",
+      "RM3100 in the F9P mast, 80 mm above the carbon, isolated by the TPU collar. Far from the 45 A ESC current loop.",
     role: "Observes Earth-field yaw. The EKF uses it gently; a nearby steel car roof is a disturbance, not a feature.",
     fsd: "While tracking, yaw is commanded from optical flow of the target, not from the compass. Mag is a bias prior, not the chase sensor.",
     specs: [
@@ -160,13 +160,13 @@ export const PARTS: PartInfo[] = [
     name: "6S LiPo pack",
     group: "Power",
     summary:
-      "6 000 mAh 6S slung under the plate. Low CG, short power leads, XT90 into the 4-in-1.",
+      "Tattu 6 000 mAh 6S, 148 × 45 × 59 mm, 885 g, XT90. Sits in the printed 155 × 50 mm tray under the 120 × 128 mm battery plate.",
     role: "Energy and voltage sag. The FC watches cell voltage and will abort a chase before the mixer runs out of headroom.",
     fsd: "Pursuit is a high-current regime. FSD caps lateral accel as voltage sags so the detector does not starve mid-corner.",
     specs: [
-      { label: "Pack", value: "6S 6 000 mAh" },
-      { label: "Hover", value: "18 A" },
-      { label: "Endurance", value: "14 min chase" },
+      { label: "Pack", value: "148 × 45 × 59 mm" },
+      { label: "Mass", value: "885 g" },
+      { label: "Plug", value: "XT90" },
     ],
   },
   {
@@ -174,13 +174,13 @@ export const PARTS: PartInfo[] = [
     name: "Command radio",
     group: "Link",
     summary:
-      "900 MHz control + 2.4 GHz telemetry. A human can always override FSD with a stick; the mixer still runs on the FC.",
+      "ExpressLRS 900 MHz Nano RX (~18 × 11 × 4 mm) with 90 mm dipoles clipped to the rear Ø20 mm arms. 2.4 GHz SiK is telemetry only.",
     role: "Failsafe path. Loss of RC for 1.5 s with a live vision lock continues the chase; loss of both triggers a GNSS hold.",
     fsd: "FSD is a setpoint source, not a pilot replacement. The radio is the authority flag that enables or kills the tracker.",
     specs: [
+      { label: "RX", value: "18 × 11 × 4 mm" },
+      { label: "Antenna", value: "90 mm dipole" },
       { label: "Control", value: "900 MHz CRSF" },
-      { label: "Latency", value: "8 ms stick" },
-      { label: "Failsafe", value: "Hold / land" },
     ],
   },
 ];

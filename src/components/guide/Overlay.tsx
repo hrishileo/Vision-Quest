@@ -9,7 +9,9 @@ import {
 } from "lucide-react";
 import { PIPELINE, PARTS, PART_MAP } from "@/lib/guide/catalog";
 import { LOCK_LABEL, useGuide } from "@/lib/guide/store";
-import { MODES, type BuildView, type CamView } from "@/lib/guide/types";
+import { BUILD_VIEWS, MODES, type CamView } from "@/lib/guide/types";
+import { KitPanel } from "@/components/guide/KitPanel";
+import { kitLabel } from "@/lib/bom";
 
 function SliderRow({
   label,
@@ -42,6 +44,7 @@ function SliderRow({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
+        suppressHydrationWarning
       />
     </label>
   );
@@ -116,8 +119,10 @@ export function Overlay() {
   const setSelected = useGuide((s) => s.setSelected);
   const explode = useGuide((s) => s.explode);
   const setExplode = useGuide((s) => s.setExplode);
+  const toggleExplode = useGuide((s) => s.toggleExplode);
   const shell = useGuide((s) => s.shell);
   const setShell = useGuide((s) => s.setShell);
+  const toggleShell = useGuide((s) => s.toggleShell);
   const rpm = useGuide((s) => s.rpm);
   const setRpm = useGuide((s) => s.setRpm);
   const cutaway = useGuide((s) => s.cutaway);
@@ -141,6 +146,7 @@ export function Overlay() {
 
   const activeId = selected ?? hovered;
   const part = activeId ? PART_MAP[activeId] : undefined;
+  const kit = activeId ? kitLabel(activeId) : undefined;
   const lockTone =
     tel.lock === "track"
       ? "text-lock"
@@ -152,7 +158,7 @@ export function Overlay() {
   const showPip = (mode === "vision" || mode === "pursuit") && camView !== "fpv";
 
   return (
-    <div className="pointer-events-none absolute inset-0 flex flex-col text-fg">
+    <div className="pointer-events-none absolute inset-0 flex min-h-0 min-w-0 flex-col text-fg">
       <header className="pointer-events-auto flex items-start justify-between gap-3 p-3 md:p-5">
         <div className="min-w-0">
           <p className="font-mono text-2xs uppercase tracking-[0.28em] text-muted">
@@ -162,26 +168,29 @@ export function Overlay() {
             Vision Quest
           </h1>
           <p className="mt-0.5 hidden max-w-sm text-xs text-muted sm:block">
-            {buildView === "finished"
-              ? "Finished airframe · camera FSD · Jetson Orin"
-              : "Skeleton · PX4 + Orin + dedicated vision camera"}
+            {buildView === "kit"
+              ? "Kit list · prices, fit check, build order"
+              : buildView === "finished"
+                ? "Finished · exploded assembly · hover a part for its SKU"
+                : "Skeleton · assembled HV-1 OSPREY kit"}
           </p>
           <div className="mt-2 flex gap-1" role="group" aria-label="Build">
-            {(["skeleton", "finished"] as BuildView[]).map((v) => (
+            {BUILD_VIEWS.map((v) => (
               <button
-                key={v}
+                key={v.id}
                 type="button"
-                onClick={() => setBuildView(v)}
+                onClick={() => setBuildView(v.id)}
                 className={
                   "min-h-9 rounded-sm px-2.5 py-1.5 font-mono text-2xs uppercase tracking-[0.14em] " +
-                  (buildView === v ? "bg-fg text-accent-fg" : "bg-surface text-muted hover:text-fg")
+                  (buildView === v.id ? "bg-fg text-accent-fg" : "bg-surface text-muted hover:text-fg")
                 }
               >
-                {v}
+                {v.label}
               </button>
             ))}
           </div>
         </div>
+        {buildView !== "kit" && (
         <nav
           className="flex max-w-[70%] flex-wrap justify-end gap-1"
           aria-label="Guide modes"
@@ -205,8 +214,15 @@ export function Overlay() {
             );
           })}
         </nav>
+        )}
       </header>
 
+      {buildView === "kit" ? (
+        <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col">
+          <KitPanel />
+        </div>
+      ) : (
+      <>
       <div className="flex min-h-0 flex-1">
         <aside className="pointer-events-auto hidden w-56 shrink-0 flex-col gap-1 overflow-y-auto p-4 pt-0 md:flex">
           <p className="mb-2 font-mono text-2xs uppercase tracking-[0.18em] text-subtle">
@@ -215,6 +231,7 @@ export function Overlay() {
           {PARTS.map((p) => {
             const on = selected === p.id;
             const hot = hovered === p.id;
+            const kitItem = kitLabel(p.id);
             return (
               <button
                 key={p.id}
@@ -230,9 +247,9 @@ export function Overlay() {
                 }
               >
                 <span className="block font-mono text-2xs uppercase tracking-[0.14em] text-subtle">
-                  {p.group}
+                  {kitItem.brand || p.group}
                 </span>
-                <span className="block text-sm">{p.name}</span>
+                <span className="block text-sm">{kitItem.title}</span>
               </button>
             );
           })}
@@ -268,9 +285,16 @@ export function Overlay() {
             {part ? (
               <>
                 <p className="font-mono text-2xs uppercase tracking-[0.18em] text-subtle">
-                  {part.group}
+                  {kit?.brand || part.group}
                 </p>
-                <h2 className="mt-1 text-lg font-medium tracking-tight">{part.name}</h2>
+                <h2 className="mt-1 text-lg font-medium tracking-tight">
+                  {kit?.title ?? part.name}
+                </h2>
+                {kit?.sku ? (
+                  <p className="mt-1 font-mono text-2xs uppercase tracking-[0.12em] text-lock">
+                    {kit.sku}
+                  </p>
+                ) : null}
                 <p className="mt-2 text-sm leading-relaxed text-muted">{part.summary}</p>
                 <p className="mt-3 text-sm leading-relaxed text-fg/90">
                   <span className="font-mono text-2xs uppercase tracking-[0.16em] text-subtle">
@@ -300,9 +324,7 @@ export function Overlay() {
                 <p className="mt-2 text-sm leading-relaxed text-muted">
                   {mode === "pursuit"
                     ? "Orin holds a Kalman track on the selected car — camera only, no LiDAR. Click another vehicle to switch lock."
-                    : buildView === "finished"
-                      ? "Horizon Vision flight article. Toggle Skeleton to see the PX4 + Orin stack. Real part photos replace this body."
-                      : "Hover a part — the name follows the pointer. Click for the spec sheet. Drag to orbit. Press T to tour."}
+                    : "Hover a part — the name follows the pointer. Click for the spec sheet. Drag to orbit. Press T to tour."}
                 </p>
               </>
             )}
@@ -379,6 +401,30 @@ export function Overlay() {
             >
               Tour
             </button>
+            {mode !== "pursuit" && (
+              <>
+                <button
+                  type="button"
+                  onClick={toggleExplode}
+                  className={
+                    "min-h-11 rounded-sm px-3 py-2 font-mono text-2xs uppercase tracking-[0.12em] " +
+                    (explode > 0.2 ? "bg-fg text-accent-fg" : "text-muted hover:text-fg")
+                  }
+                >
+                  Explode
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleShell}
+                  className={
+                    "min-h-11 rounded-sm px-3 py-2 font-mono text-2xs uppercase tracking-[0.12em] " +
+                    (shell < 0.55 ? "bg-fg text-accent-fg" : "text-muted hover:text-fg")
+                  }
+                >
+                  Shell
+                </button>
+              </>
+            )}
             {mode === "pursuit" && (
               <div className="flex gap-1">
                 {(["chase", "orbit", "fpv"] as CamView[]).map((v) => (
@@ -438,16 +484,6 @@ export function Overlay() {
                 onChange={setTightness}
               />
             </>
-          ) : buildView === "finished" ? (
-            <SliderRow
-              label="Prop RPM"
-              value={rpm}
-              min={0}
-              max={9000}
-              step={50}
-              display={`${Math.round(rpm)}`}
-              onChange={setRpm}
-            />
           ) : (
             <>
               <SliderRow
@@ -499,7 +535,7 @@ export function Overlay() {
                 (selected === p.id ? "bg-fg text-accent-fg" : "bg-surface text-muted")
               }
             >
-              {p.name}
+              {kitLabel(p.id).title}
             </button>
           ))}
         </div>
@@ -534,13 +570,20 @@ export function Overlay() {
       </div>
 
       {part && (
-        <div className="pointer-events-auto absolute inset-x-3 bottom-[9.5rem] max-h-28 overflow-y-auto rounded-xl hud-panel p-3 lg:hidden">
+        <div className="pointer-events-auto absolute inset-x-3 bottom-[9.5rem] max-h-40 overflow-y-auto rounded-xl hud-panel p-3 lg:hidden">
           <p className="font-mono text-2xs uppercase tracking-[0.16em] text-subtle">
-            {part.group}
+            {kit?.brand || part.group}
           </p>
-          <p className="text-sm font-medium">{part.name}</p>
+          <p className="text-sm font-medium">{kit?.title ?? part.name}</p>
+          {kit?.sku ? (
+            <p className="mt-0.5 font-mono text-2xs uppercase tracking-[0.12em] text-lock">
+              {kit.sku}
+            </p>
+          ) : null}
           <p className="mt-1 text-xs leading-relaxed text-muted">{part.summary}</p>
         </div>
+      )}
+      </>
       )}
     </div>
   );

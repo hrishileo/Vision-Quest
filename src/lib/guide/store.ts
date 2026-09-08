@@ -43,6 +43,8 @@ type GuideState = {
   setHovered: (id: string | null) => void;
   setExplode: (n: number) => void;
   setShell: (n: number) => void;
+  toggleExplode: () => void;
+  toggleShell: () => void;
   setRpm: (n: number) => void;
   toggleCutaway: () => void;
   togglePaused: () => void;
@@ -61,7 +63,7 @@ export const useGuide = create<GuideState>((set) => ({
   mode: "anatomy",
   selected: null,
   hovered: null,
-  explode: 0.52,
+  explode: 0,
   shell: 1,
   rpm: 1800,
   cutaway: false,
@@ -81,18 +83,20 @@ export const useGuide = create<GuideState>((set) => ({
       const next: Partial<GuideState> = { mode };
       if (mode === "anatomy") {
         next.camView = "orbit";
-        next.explode = 0.52;
+        next.explode = s.buildView === "skeleton" ? 0 : 0.52;
         next.shell = 1;
         next.selected = null;
       }
       if (mode === "controller") {
         next.selected = s.selected ?? "fc";
-        next.explode = Math.max(s.explode, 0.48);
+        next.explode = 0;
+        next.shell = 1;
         next.camView = "orbit";
       }
       if (mode === "vision") {
         next.selected = s.selected && s.selected !== "fc" ? s.selected : "camera";
-        next.explode = Math.min(Math.max(s.explode, 0.12), 0.28);
+        next.explode = 0;
+        next.shell = 1;
         next.camView = "orbit";
       }
       if (mode === "pursuit") {
@@ -106,6 +110,10 @@ export const useGuide = create<GuideState>((set) => ({
   setHovered: (hovered) => set({ hovered }),
   setExplode: (explode) => set({ explode }),
   setShell: (shell) => set({ shell }),
+  toggleExplode: () =>
+    set((s) => ({ explode: s.explode > 0.2 ? 0 : 0.55 })),
+  toggleShell: () =>
+    set((s) => ({ shell: s.shell < 0.55 ? 1 : 0.18 })),
   setRpm: (rpm) => set({ rpm }),
   toggleCutaway: () => set((s) => ({ cutaway: !s.cutaway })),
   togglePaused: () => set((s) => ({ paused: !s.paused })),
@@ -121,9 +129,13 @@ export const useGuide = create<GuideState>((set) => ({
   setBuildView: (buildView) =>
     set((s) => ({
       buildView,
+      touring: buildView === "kit" ? false : s.touring,
       explode:
-        buildView === "finished" ? 0 : s.explode < 0.1 ? 0.52 : s.explode,
-      cutaway: buildView === "finished" ? false : s.cutaway,
+        buildView === "skeleton" || buildView === "kit"
+          ? 0
+          : s.explode < 0.08
+            ? 0.52
+            : s.explode,
     })),
   setStandoff: (standoff) => set({ standoff }),
   setAltitude: (altitude) => set({ altitude }),

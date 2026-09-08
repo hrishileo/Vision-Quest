@@ -10,12 +10,12 @@ Horizon Vision dropped LiDAR. The stack is a 650 mm quad, PX4 on an STM32H7, and
 
 Vision Quest is the presentation layer for that airframe:
 
-1. **Airframe** — exploded assembly. Hover a part for its name. Click for the spec sheet.
+1. **Airframe** — HV-1 OSPREY kit geometry. Hover a part for its SKU. Click for the spec sheet.
 2. **Controller** — live attitude demo, PID bars, mixer, IMU axes.
-3. **Vision FSD** — camera frustum, lock beam, detection pipeline, picture-in-picture.
+3. **Vision FSD** — camera frustum tracks the target, lock beam, detection pipeline, picture-in-picture.
 4. **Pursuit** — oval track, Kalman-style track hold, chase / orbit / FPV.
 
-**Skeleton** is the educational X-ray. **Finished** is the assembled product shot.
+**Skeleton** is the assembled HV-1 OSPREY kit (Creo-style carbon airframe + real parts). **Finished** is the exploded assembly. **Kit** is the real BOM: price list, fit check, and build order.
 
 Keys: `1–4` modes · `Space` pause · `T` guided tour · `C` cutaway · `B` skeleton/finished · drag to orbit.
 

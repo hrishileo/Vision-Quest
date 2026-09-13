@@ -21,7 +21,7 @@ export function GuideApp() {
       engine?.dispose();
       useGuide.getState().setReady(false);
     };
-  }, ["hv1-cad-4"]);
+  }, ["hv1-scan-2"]);
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-bg">

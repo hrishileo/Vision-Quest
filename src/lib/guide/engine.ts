@@ -8,12 +8,22 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { buildDrone, type DroneBuild } from "./build-drone";
 import { buildBlueprint, setBlueprintVisible, type Blueprint } from "./blueprint";
-import { buildWorld, makeStudioCar, trackPoint, trackTangent, type WorldBuild } from "./build-world";
+import { applySignalLights, buildWorld, makeStudioCar, poseWorldCars, type WorldBuild } from "./build-world";
 import { PART_MAP } from "./catalog";
 import { kitLabel } from "@/lib/bom";
 import { TOUR_BEATS, useGuide } from "./store";
-import type { BBox, LockState, Telemetry } from "./types";
+import { isAir, type BBox, type LockState, type Mode, type Telemetry } from "./types";
+import type { TrafficSnapshot } from "./traffic";
 import { Y } from "./specs";
+import { BUILDINGS, CAR_L, CAR_W } from "./city";
+import {
+  SCAN_PERIOD,
+  SCAN_PULSE,
+  SCAN_RANGE,
+  emptyScan,
+  type ScanContact,
+  type ScanSnapshot,
+} from "./debris";
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -23,6 +33,11 @@ const _ray = new THREE.Raycaster();
 const _ptr = new THREE.Vector2();
 const _q = new THREE.Quaternion();
 const _look = new THREE.Vector3();
+const _gpos = new THREE.Vector3();
+const _cam = new THREE.Vector3();
+const _to = new THREE.Vector3();
+const _meas = new THREE.Vector3();
+const _mvel = new THREE.Vector3();
 
 type Label = { id: string; el: HTMLDivElement; obj: CSS2DObject };
 
@@ -76,7 +91,7 @@ export class GuideEngine {
   private pursuitFog: THREE.Fog;
   private imuAxes: THREE.AxesHelper;
   private signalLines: THREE.Line[];
-  private dronePos = new THREE.Vector3(0, 7, 18);
+  private dronePos = new THREE.Vector3(5.5, 8, 32);
   private droneVel = new THREE.Vector3();
   private prevErr = new THREE.Vector3();
   private yaw = 0;
@@ -84,6 +99,16 @@ export class GuideEngine {
   private pitch = 0;
   private pred = new THREE.Vector3();
   private predVel = new THREE.Vector3();
+  private detectedIds: number[] = [];
+  private traffic: TrafficSnapshot | null = null;
+  private scanSnap: ScanSnapshot = emptyScan();
+  private scanAcc = 0;
+  private scanPulse = 1;
+  private scanCycle = 0;
+  private scanAge = 0;
+  private learned = new Set<string>();
+  private scanRing: THREE.Mesh;
+  private debrisLabels: { id: number; el: HTMLDivElement; obj: CSS2DObject; kind: HTMLSpanElement; meta: HTMLSpanElement }[] = [];
   private lock: LockState = "search";
   private lockAge = 0;
   private missAge = 0;
@@ -185,14 +210,14 @@ export class GuideEngine {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0b0d);
     this.studioFog = new THREE.Fog(0x0a0b0d, 8, 18);
-    this.pursuitFog = new THREE.Fog(0x0c1014, 28, 95);
+    this.pursuitFog = new THREE.Fog(0x14181e, 40, 155);
     this.scene.fog = this.studioFog;
 
     this.camera = new THREE.PerspectiveCamera(
       38,
       Math.max(host.clientWidth, 1) / Math.max(host.clientHeight, 1),
       0.04,
-      200,
+      280,
     );
     this.camera.position.set(2.45, 1.42, 2.65);
 
@@ -209,11 +234,11 @@ export class GuideEngine {
     this.key.castShadow = true;
     this.key.shadow.mapSize.set(this.useBloom ? 1024 : 512, this.useBloom ? 1024 : 512);
     this.key.shadow.camera.near = 0.2;
-    this.key.shadow.camera.far = 60;
-    this.key.shadow.camera.left = -16;
-    this.key.shadow.camera.right = 16;
-    this.key.shadow.camera.top = 16;
-    this.key.shadow.camera.bottom = -16;
+    this.key.shadow.camera.far = 90;
+    this.key.shadow.camera.left = -40;
+    this.key.shadow.camera.right = 40;
+    this.key.shadow.camera.top = 40;
+    this.key.shadow.camera.bottom = -40;
     this.scene.add(this.key);
     this.rim = new THREE.DirectionalLight(0x9aa8b4, 0.85);
     this.rim.position.set(-2.2, 1.4, -1.8);
@@ -256,11 +281,25 @@ export class GuideEngine {
     this.world = buildWorld();
     this.world.group.visible = false;
     this.scene.add(this.world.group);
-    this.world.cars.forEach((c, i) => {
+    this.world.cars.forEach((c) => {
       c.group.traverse((o) => {
-        o.userData.carIndex = i;
+        o.userData.carIndex = c.id;
       });
     });
+
+    const ringGeo = new THREE.RingGeometry(0.92, 1, 72);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x8fbf9a,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this.scanRing = new THREE.Mesh(ringGeo, ringMat);
+    this.scanRing.rotation.x = -Math.PI / 2;
+    this.scanRing.visible = false;
+    this.scene.add(this.scanRing);
+    ignorePick(this.scanRing);
 
     this.studioCar = makeStudioCar();
     this.studioCar.visible = false;
@@ -314,7 +353,7 @@ export class GuideEngine {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.minDistance = 0.28;
-    this.controls.maxDistance = 48;
+    this.controls.maxDistance = 90;
     this.controls.target.set(0, 0.04, 0);
     this.controls.autoRotate = false;
     this.controls.autoRotateSpeed = 0.45;
@@ -338,6 +377,7 @@ export class GuideEngine {
     }
 
     this.mountLabels();
+    this.mountDebrisLabels();
 
     this.onResize = () => this.resize();
     this.onPointerDown = (e) => {
@@ -379,7 +419,7 @@ export class GuideEngine {
     };
     this.onKey = (e) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      const map: Record<string, "anatomy" | "controller" | "vision" | "pursuit"> = {
+      const map: Record<string, Mode> = {
         Digit1: "anatomy",
         Digit2: "controller",
         Digit3: "vision",
@@ -417,6 +457,17 @@ export class GuideEngine {
     this.renderer.setAnimationLoop(this.loop);
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(host);
+    const self = this;
+    window.__trafficTest = () => self.world.sim.diagnostics();
+    window.__scanTest = () => ({
+      cycle: self.scanSnap.cycle,
+      learned: self.learned.size,
+      anomalies: self.scanSnap.anomalies,
+      debris: self.scanSnap.debris,
+      blockades: self.scanSnap.blockades,
+      nextIn: self.scanSnap.nextIn,
+      hits: self.scanSnap.hits.filter((h) => h.anomaly).map((h) => h.type),
+    });
   }
 
   private makeFrustum(): THREE.LineSegments {
@@ -500,6 +551,23 @@ export class GuideEngine {
     }
   }
 
+  private mountDebrisLabels() {
+    for (const rig of this.world.debris) {
+      const el = document.createElement("div");
+      el.className = "scan-tag";
+      const kind = document.createElement("span");
+      kind.textContent = rig.def.label;
+      const meta = document.createElement("span");
+      meta.textContent = `${rig.def.origin} ${rig.def.kind}`;
+      el.append(kind, meta);
+      const obj = new CSS2DObject(el);
+      obj.position.set(0, 1.15, 0);
+      obj.visible = false;
+      rig.group.add(obj);
+      this.debrisLabels.push({ id: rig.id, el, obj, kind, meta });
+    }
+  }
+
   private resize() {
     const w = Math.max(this.host.clientWidth, 1);
     const h = Math.max(this.host.clientHeight, 1);
@@ -530,7 +598,7 @@ export class GuideEngine {
     }
     if (s.buildView !== this.lastBuild) {
       this.lastBuild = s.buildView;
-      if (s.mode !== "pursuit") this.onModeChange(s.mode, s.mode);
+      if (!isAir(s.mode)) this.onModeChange(s.mode, s.mode);
     }
 
     if (s.touring && !s.paused) {
@@ -542,18 +610,18 @@ export class GuideEngine {
     }
     this.wasTouring = s.touring;
 
-    const studio = s.mode !== "pursuit";
+    const studio = !isAir(s.mode);
     this.applyBlueprint(studio && s.mode === "anatomy" && s.buildView === "skeleton");
 
     this.studio.visible = studio;
     this.world.group.visible = !studio;
     this.studioCar.visible = s.mode === "vision";
     this.scene.fog = studio ? this.studioFog : this.pursuitFog;
-    this.scene.background = new THREE.Color(studio ? 0x0a0b0d : 0x0c1014);
+    this.scene.background = new THREE.Color(studio ? 0x0a0b0d : 0x14181e);
     this.scene.environmentIntensity = studio ? 0.58 : 0.28;
     this.hemi.intensity = studio ? 1.05 : 0.5;
     this.key.intensity = studio ? 2.8 : 1.45;
-    this.key.position.set(studio ? 3.2 : 18, studio ? 4.4 : 22, studio ? 2.2 : 8);
+    this.key.position.set(studio ? 3.2 : 28, studio ? 4.4 : 42, studio ? 2.2 : 18);
     this.rim.intensity = 0.85;
     if (this.bloomPass) this.bloomPass.strength = 0.38;
     this.controls.autoRotate =
@@ -595,7 +663,7 @@ export class GuideEngine {
       }
     }
 
-    const explode = s.mode === "pursuit" ? 0 : s.explode;
+    const explode = isAir(s.mode) ? 0 : s.explode;
     for (const piece of this.drone.pieces) {
       piece.object.position.copy(piece.rest).addScaledVector(piece.explode, explode);
     }
@@ -603,7 +671,7 @@ export class GuideEngine {
     this.drone.finishGroup.visible = false;
     for (const o of this.drone.skeletonOnly) o.visible = true;
 
-    const shell = s.mode === "pursuit" ? 1 : s.shell;
+    const shell = isAir(s.mode) ? 1 : s.shell;
     for (const m of this.drone.shellMeshes) {
       const mat = m.material as THREE.MeshStandardMaterial;
       mat.transparent = shell < 0.97;
@@ -629,7 +697,7 @@ export class GuideEngine {
     }
 
     const rpm =
-      s.mode === "pursuit"
+      isAir(s.mode)
         ? 1800 + useGuide.getState().telemetry.throttle * 7200
         : s.mode === "controller"
           ? 2400 + this.pidP * 1800
@@ -657,7 +725,7 @@ export class GuideEngine {
       line.visible = mat.opacity > 0.02;
     }
 
-    if (s.mode === "pursuit") {
+    if (isAir(s.mode)) {
       this.updatePursuit(simDt, s.standoff, s.altitude, s.tightness);
     } else if (s.mode === "vision") {
       this.updateVisionStudio(simDt, t);
@@ -700,6 +768,7 @@ export class GuideEngine {
     this.syncFrustum(s.mode);
     this.updateSelection(s.selected, s.hovered);
     this.updateLabels(s);
+    this.updateScanVisual(dt, s.mode, s.paused);
     this.updateCamera(dt, s.mode, s.camView, s.selected);
     if (s.camView === "orbit") this.controls.update();
 
@@ -714,13 +783,37 @@ export class GuideEngine {
     this.idle = 0;
     this.lockBeam.visible = false;
     this.predMesh.visible = false;
-    this.frustum.visible = to === "controller" || to === "vision" || to === "pursuit";
+    this.frustum.visible = to === "controller" || to === "vision" || isAir(to);
     this.hoverObj = null;
-    if (to === "pursuit") {
-      this.controls.maxDistance = 48;
+    if (isAir(to)) {
+      this.world.sim.reset((Date.now() ^ 0x85ebca6b) >>> 0);
+      poseWorldCars(this.world, 0);
+      applySignalLights(this.world.signals, this.world.sim.nsLit, this.world.sim.ewLit);
+      this.targetIndex = this.world.sim.subjectId;
+      const sub = this.world.sim.cars[this.targetIndex] ?? this.world.sim.cars[0]!;
+      this.dronePos.set(sub.x, 8, sub.z + 14);
+      this.droneVel.set(0, 0, 0);
+      this.yaw = Math.PI;
+      this.roll = 0;
+      this.pitch = 0;
+      this.lock = "search";
+      this.lockAge = 0;
+      this.missAge = 0;
+      this.confidence = 0.08;
+      this.pred.set(sub.x, 0.6, sub.z);
+      this.predVel.set(sub.vx, 0, sub.vz);
+      this.integral.set(0, 0, 0);
+      this.learned.clear();
+      this.scanAcc = 0;
+      this.scanPulse = 1;
+      this.scanCycle = 0;
+      this.scanAge = 0;
+      this.scanSnap = emptyScan();
+      this.runScan();
+      this.controls.maxDistance = 90;
       this.controls.minDistance = 1.2;
       const back = _v.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-      this.camera.position.copy(this.dronePos).addScaledVector(back, -7.2).add(_v3.set(0, 3.1, 0));
+      this.camera.position.copy(this.dronePos).addScaledVector(back, -8.4).add(_v3.set(0, 3.4, 0));
       this.controls.target.copy(this.dronePos);
       this.controls.target.y += 0.4;
     } else {
@@ -823,7 +916,7 @@ export class GuideEngine {
     if (mode === "vision") {
       _v2.copy(this.studioCar.position);
       _v2.y += 0.12;
-    } else if (mode === "pursuit") {
+    } else if (isAir(mode)) {
       const car = this.world.cars[this.targetIndex] ?? this.world.cars[0]!;
       _v2.copy(car.group.position);
       _v2.y = 0.8;
@@ -833,11 +926,11 @@ export class GuideEngine {
     }
     this.frustum.up.set(0, 1, 0);
     this.frustum.lookAt(_v2);
-    this.frustum.scale.setScalar(mode === "pursuit" ? 2.4 : mode === "vision" ? 1.35 : 1);
+    this.frustum.scale.setScalar(isAir(mode) ? 2.4 : mode === "vision" ? 1.35 : 1);
   }
 
   private updateThrust(mode: string) {
-    const show = mode === "controller" || mode === "pursuit";
+    const show = mode === "controller" || isAir(mode);
     for (let i = 0; i < this.drone.thrustCones.length; i++) {
       const cone = this.drone.thrustCones[i]!;
       const v = this.mix[i] ?? 0.18;
@@ -910,23 +1003,17 @@ export class GuideEngine {
 
   private updatePursuit(dt: number, standoff: number, altitude: number, tightness: number) {
     if (dt <= 0) return;
-    for (const car of this.world.cars) {
-      car.phase += car.speed * dt;
-      const p = trackPoint(car.phase);
-      const tan = trackTangent(car.phase);
-      car.group.position.set(p.x, 0, p.z);
-      car.group.rotation.y = Math.atan2(tan.x, tan.z);
-      const wspin = car.speed * 28 * dt;
-      for (const w of car.wheels) w.rotation.x += wspin;
-    }
+    const sim = this.world.sim;
+    sim.step(dt);
+    poseWorldCars(this.world, dt);
+    applySignalLights(this.world.signals, sim.nsLit, sim.ewLit);
 
-    const car = this.world.cars[this.targetIndex] ?? this.world.cars[0]!;
-    const tgt = car.group.position;
-    const tan = trackTangent(car.phase);
-    const desired = _v.copy(tgt).addScaledVector(tan, -standoff);
-    desired.y = altitude;
+    const target = sim.cars[this.targetIndex] ?? sim.cars[sim.subjectId]!;
+    const hx = Math.sin(target.yaw);
+    const hz = Math.cos(target.yaw);
+    const desired = _v2.set(target.x - hx * standoff, altitude, target.z - hz * standoff);
 
-    const err = _v2.copy(desired).sub(this.dronePos);
+    const err = _v.copy(desired).sub(this.dronePos);
     const dErr = _v3.copy(err).sub(this.prevErr).multiplyScalar(1 / Math.max(dt, 1 / 120));
     this.prevErr.copy(err);
     this.integral.addScaledVector(err, dt);
@@ -946,8 +1033,8 @@ export class GuideEngine {
     this.pidD = Math.min(1, dErr.length() * 0.02);
     this.pidI = Math.min(1, this.integral.length() * 0.15);
 
-    const lookX = tgt.x - this.dronePos.x;
-    const lookZ = tgt.z - this.dronePos.z;
+    const lookX = target.x - this.dronePos.x;
+    const lookZ = target.z - this.dronePos.z;
     const wantYaw = Math.atan2(lookX, lookZ);
     this.yaw = THREE.MathUtils.damp(this.yaw, wantYaw, 3.2, dt);
     const lat = this.droneVel.clone().setY(0);
@@ -962,10 +1049,10 @@ export class GuideEngine {
     this.drone.group.rotation.set(this.pitch, this.yaw, this.roll);
 
     this.drone.group.updateMatrixWorld(true);
-    const gPos = this.drone.gimbalYaw.getWorldPosition(_v);
-    const lx = tgt.x - gPos.x;
-    const ly = tgt.y + 0.6 - gPos.y;
-    const lz = tgt.z - gPos.z;
+    const gPos = this.drone.gimbalYaw.getWorldPosition(_gpos);
+    const lx = target.x - gPos.x;
+    const ly = 0.6 - gPos.y;
+    const lz = target.z - gPos.z;
     const local = new THREE.Vector3(lx, ly, lz).applyQuaternion(
       this.drone.group.getWorldQuaternion(_q).invert(),
     );
@@ -985,18 +1072,28 @@ export class GuideEngine {
     );
 
     this.drone.droneCam.updateMatrixWorld();
-    _ndc.copy(tgt).setY(tgt.y + 0.6).project(this.drone.droneCam);
-    const inView =
-      Math.abs(_ndc.x) < 0.92 && Math.abs(_ndc.y) < 0.92 && _ndc.z > 0 && _ndc.z < 1;
+    const camPos = this.drone.droneCam.getWorldPosition(_cam);
+    const detected: number[] = [];
+    for (const car of sim.cars) {
+      _ndc.set(car.x, 0.6, car.z).project(this.drone.droneCam);
+      const inView =
+        Math.abs(_ndc.x) < 0.92 && Math.abs(_ndc.y) < 0.92 && _ndc.z > 0 && _ndc.z < 1;
+      if (!inView) continue;
+      _to.set(car.x, 1, car.z).sub(camPos);
+      const distHit = _to.length();
+      if (distHit < 0.4) continue;
+      _ray.set(camPos, _to.normalize());
+      const hits = _ray.intersectObjects(this.world.buildings, false);
+      const occluded = hits.length > 0 && hits[0]!.distance < distHit - 1.2;
+      if (!occluded) detected.push(car.id);
+    }
+    this.detectedIds = detected;
+    this.traffic = sim.assess(detected, this.targetIndex);
 
-    const camPos = this.drone.droneCam.getWorldPosition(_v2);
-    _ray.set(camPos, _v3.copy(tgt).setY(1).sub(camPos).normalize());
-    const hits = _ray.intersectObjects(this.world.buildings, false);
-    const distCar = camPos.distanceTo(tgt);
-    const occluded = hits.length > 0 && hits[0]!.distance < distCar - 1.2;
-
-    const detected = inView && !occluded;
-    if (detected) {
+    const tgtSeen = detected.includes(target.id);
+    _ndc.set(target.x, 0.6, target.z).project(this.drone.droneCam);
+    const distCar = Math.hypot(camPos.x - target.x, camPos.z - target.z);
+    if (tgtSeen) {
       this.lockAge += dt;
       this.missAge = 0;
       if (this.lock === "search" && this.lockAge > 0.28) this.lock = "acquire";
@@ -1005,7 +1102,7 @@ export class GuideEngine {
       this.confidence = Math.min(1, this.confidence + dt * 1.4);
       const nx = (_ndc.x + 1) / 2;
       const ny = (1 - _ndc.y) / 2;
-      const scale = THREE.MathUtils.clamp(4.2 / distCar, 0.08, 0.28);
+      const scale = THREE.MathUtils.clamp(4.2 / Math.max(distCar, 1), 0.08, 0.28);
       this.bbox = { nx: nx - scale * 0.55, ny: ny - scale * 0.7, nw: scale * 1.1, nh: scale * 1.4 };
     } else {
       this.missAge += dt;
@@ -1015,24 +1112,38 @@ export class GuideEngine {
       if (this.missAge > 0.55 && (this.lock === "track" || this.lock === "acquire")) {
         this.lock = "lost";
       }
-      if (this.missAge > 1.6) this.lock = "search";
+      if (this.missAge > 1.6) {
+        this.lock = "search";
+        if (detected.length) {
+          const nearest = detected.reduce((best, id) => {
+            const c = sim.cars[id]!;
+            const d = Math.hypot(c.x - this.dronePos.x, c.z - this.dronePos.z);
+            const b = sim.cars[best]!;
+            const db = Math.hypot(b.x - this.dronePos.x, b.z - this.dronePos.z);
+            return d < db ? id : best;
+          }, detected[0]!);
+          this.targetIndex = nearest;
+        }
+      }
     }
 
-    const meas = tgt.clone().setY(0.6);
-    if (detected) {
-      const innov = meas.clone().sub(this.pred);
-      this.pred.addScaledVector(innov, 0.35);
-      this.predVel.lerp(tan.clone().multiplyScalar(car.speed * Math.hypot(28.8, 19.2)), 0.25);
+    const meas = _meas.set(target.x, 0.6, target.z);
+    const measVel = _mvel.set(target.vx, 0, target.vz);
+    if (tgtSeen) {
+      _to.copy(meas).sub(this.pred);
+      this.pred.addScaledVector(_to, 0.42);
+      this.predVel.lerp(measVel, 0.38);
     } else {
       this.pred.addScaledVector(this.predVel, dt);
+      this.predVel.multiplyScalar(0.985);
     }
 
     this.predMesh.visible = this.lock !== "search";
     this.predMesh.position.copy(this.pred);
-    this.predMesh.rotation.copy(car.group.rotation);
+    this.predMesh.rotation.y = target.yaw;
 
     this.lockBeam.visible = this.lock === "track" || this.lock === "acquire";
-    if (this.lockBeam.visible) this.placeBeam(gPos, tgt.clone().setY(0.8));
+    if (this.lockBeam.visible) this.placeBeam(gPos, _to.set(target.x, 0.8, target.z));
     this.frustum.visible = true;
     this.frustum.scale.setScalar(8);
     this.pipelineStep =
@@ -1075,7 +1186,7 @@ export class GuideEngine {
 
   private updateLabels(s: ReturnType<typeof useGuide.getState>) {
     const hide =
-      s.buildView === "kit" || s.mode === "pursuit" || s.camView === "fpv";
+      s.buildView === "kit" || isAir(s.mode) || s.camView === "fpv";
     for (const lab of this.labelList) {
       const focus = s.hovered === lab.id || s.selected === lab.id;
       lab.obj.visible = !hide && focus;
@@ -1084,8 +1195,8 @@ export class GuideEngine {
   }
 
   private updateCamera(dt: number, mode: string, camView: string, selected: string | null) {
-    if (camView === "fpv" && mode === "pursuit") return;
-    if (camView === "chase" && mode === "pursuit") {
+    if (camView === "fpv" && isAir(mode)) return;
+    if (camView === "chase" && isAir(mode)) {
       const back = _v.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
       const desired = _v2.copy(this.dronePos).addScaledVector(back, -7.2).add(_v3.set(0, 3.1, 0));
       this.camera.position.lerp(desired, 1 - Math.exp(-2.4 * dt));
@@ -1096,7 +1207,7 @@ export class GuideEngine {
       this.camera.lookAt(this.controls.target);
       return;
     }
-    if (selected && mode !== "pursuit") {
+    if (selected && !isAir(mode)) {
       const piece = this.drone.pieces.find((p) => p.id === selected);
       if (piece) {
         piece.object.getWorldPosition(_v);
@@ -1165,7 +1276,7 @@ export class GuideEngine {
       return;
     }
     const carIndex = hit.object.userData.carIndex as number | undefined;
-    if (carIndex !== undefined && useGuide.getState().mode === "pursuit") {
+    if (carIndex !== undefined && isAir(useGuide.getState().mode)) {
       this.targetIndex = carIndex;
       this.lock = "search";
       this.lockAge = 0;
@@ -1204,45 +1315,51 @@ export class GuideEngine {
 
   private activeCamera() {
     const s = useGuide.getState();
-    if (s.mode === "pursuit" && s.camView === "fpv") return this.drone.droneCam;
+    if (isAir(s.mode) && s.camView === "fpv") return this.drone.droneCam;
     return this.camera;
   }
 
   private pushTelemetry(mode: string) {
-    const car = this.world.cars[this.targetIndex] ?? this.world.cars[0]!;
-    const range = this.dronePos.distanceTo(car.group.position);
+    const simCar =
+      this.world.sim.cars[this.targetIndex] ?? this.world.sim.cars[this.world.sim.subjectId];
+    const range = simCar
+      ? this.dronePos.distanceTo(new THREE.Vector3(simCar.x, 0, simCar.z))
+      : 0;
     const speed = this.droneVel.length();
-    const yawErr = THREE.MathUtils.radToDeg(
-      Math.atan2(car.group.position.x - this.dronePos.x, car.group.position.z - this.dronePos.z) -
-        this.yaw,
-    );
+    const yawErr = simCar
+      ? THREE.MathUtils.radToDeg(
+          Math.atan2(simCar.x - this.dronePos.x, simCar.z - this.dronePos.z) - this.yaw,
+        )
+      : 0;
     const throttle = this.mix.reduce((a, b) => a + b, 0) / 4;
     const tel: Telemetry = {
-      alt: mode === "pursuit" ? this.dronePos.y : 0,
-      speed: mode === "pursuit" ? speed : 0,
-      range: mode === "pursuit" ? range : mode === "vision" ? 1.2 : 0,
-      yawErr: mode === "pursuit" ? yawErr : 0,
-      lock: mode === "pursuit" || mode === "vision" ? this.lock : "search",
-      confidence: mode === "pursuit" || mode === "vision" ? this.confidence : 0,
+      alt: isAir(mode) ? this.dronePos.y : 0,
+      speed: isAir(mode) ? speed : 0,
+      range: isAir(mode) ? range : mode === "vision" ? 1.2 : 0,
+      yawErr: isAir(mode) ? yawErr : 0,
+      lock: isAir(mode) || mode === "vision" ? this.lock : "search",
+      confidence: isAir(mode) || mode === "vision" ? this.confidence : 0,
       fpsDetect: 30 + Math.round(this.confidence * 30),
       throttle,
       motors: this.mix,
       pidP: this.pidP,
       pidI: this.pidI,
       pidD: this.pidD,
-      loopHz: mode === "controller" ? 1000 : mode === "pursuit" ? 400 : 1000,
+      loopHz: mode === "controller" ? 1000 : isAir(mode) ? 400 : 1000,
       targetId: this.targetIndex,
       pipelineStep: this.pipelineStep,
-      bbox: mode === "vision" || mode === "pursuit" ? this.bbox : null,
+      bbox: mode === "vision" || isAir(mode) ? this.bbox : null,
+      traffic: isAir(mode) ? this.traffic : null,
+      scan: isAir(mode) ? this.scanSnap : null,
     };
-    useGuide.getState().setTelemetry(tel, mode === "pursuit" ? range : 0);
+    useGuide.getState().setTelemetry(tel, isAir(mode) ? range : 0);
   }
 
   private render() {
     const s = useGuide.getState();
     const w = this.host.clientWidth;
     const h = this.host.clientHeight;
-    const fpv = s.mode === "pursuit" && s.camView === "fpv";
+    const fpv = isAir(s.mode) && s.camView === "fpv";
     const cam = fpv ? this.drone.droneCam : this.camera;
     if (fpv) {
       this.drone.droneCam.aspect = w / Math.max(h, 1);
@@ -1262,23 +1379,191 @@ export class GuideEngine {
     }
     this.labels.render(this.scene, cam);
 
-    const wantPip = (s.mode === "vision" || s.mode === "pursuit") && !fpv && w >= 720;
-    if (wantPip) {
-      const pipW = Math.min(300, Math.floor(w * 0.26));
-      const pipH = Math.floor(pipW * (9 / 16));
-      const pipX = 20;
-      const pipY = 20;
-      this.drone.droneCam.aspect = pipW / pipH;
+    const wantPip = (s.mode === "vision" || isAir(s.mode)) && !fpv;
+    const pip = wantPip ? this.measurePip() : null;
+    if (pip) {
+      this.drone.droneCam.aspect = pip.w / pip.h;
       this.drone.droneCam.updateProjectionMatrix();
       this.drone.droneCam.updateMatrixWorld();
+      const visDrone = this.drone.group.visible;
+      const visBeam = this.lockBeam.visible;
+      const visPred = this.predMesh.visible;
+      const visBox = this.boxHelper.visible;
       this.frustum.visible = false;
+      this.drone.group.visible = false;
+      this.lockBeam.visible = false;
+      this.predMesh.visible = false;
+      this.boxHelper.visible = false;
       this.renderer.setScissorTest(true);
-      this.renderer.setViewport(pipX, pipY, pipW, pipH);
-      this.renderer.setScissor(pipX, pipY, pipW, pipH);
+      this.renderer.setViewport(pip.x, pip.y, pip.w, pip.h);
+      this.renderer.setScissor(pip.x, pip.y, pip.w, pip.h);
       this.renderer.render(this.scene, this.drone.droneCam);
       this.renderer.setScissorTest(false);
+      this.drone.group.visible = visDrone;
+      this.lockBeam.visible = visBeam;
+      this.predMesh.visible = visPred;
+      this.boxHelper.visible = visBox;
     }
     this.frustum.visible = helperOn && !fpv;
+  }
+
+  private measurePip(): { x: number; y: number; w: number; h: number } | null {
+    const frame = this.host.parentElement?.querySelector("#cam0-pip");
+    if (!(frame instanceof HTMLElement)) return null;
+    const innerW = frame.clientWidth;
+    const innerH = frame.clientHeight;
+    if (innerW < 2 || innerH < 2) return null;
+    const canvas = this.renderer.domElement;
+    const cr = canvas.getBoundingClientRect();
+    const r = frame.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2 || cr.width < 2 || cr.height < 2) return null;
+    const left = r.left - cr.left + frame.clientLeft;
+    const top = r.top - cr.top + frame.clientTop;
+    const x = Math.round(left);
+    const yTop = Math.round(top);
+    const w = Math.max(1, Math.round(left + innerW) - x);
+    const h = Math.max(1, Math.round(top + innerH) - yTop);
+    const y = Math.round(cr.height) - yTop - h;
+    if (w < 2 || h < 2) return null;
+    return { x, y, w, h };
+  }
+
+  private updateScanVisual(dt: number, mode: string, paused: boolean) {
+    const air = isAir(mode);
+    if (!air) {
+      this.scanRing.visible = false;
+      for (const lab of this.debrisLabels) lab.obj.visible = false;
+      return;
+    }
+    if (!paused) {
+      this.scanAcc += dt;
+      this.scanAge += dt;
+      if (this.scanPulse < 1) this.scanPulse += dt / SCAN_PULSE;
+      if (this.scanAcc >= SCAN_PERIOD) {
+        this.scanAcc -= SCAN_PERIOD;
+        this.runScan();
+      }
+    }
+    const sweeping = this.scanPulse < 1;
+    const t = Math.min(1, this.scanPulse);
+    if (sweeping) {
+      const r = 1.6 + t * SCAN_RANGE;
+      this.scanRing.scale.set(r, r, 1);
+      this.scanRing.position.set(this.dronePos.x, 0.06, this.dronePos.z);
+      (this.scanRing.material as THREE.MeshBasicMaterial).opacity = (1 - t) * 0.42;
+      this.scanRing.visible = true;
+    } else {
+      this.scanRing.visible = false;
+    }
+    for (const lab of this.debrisLabels) {
+      const hit = this.scanSnap.hits.find((h) => h.id === `deb-${lab.id}`);
+      lab.obj.visible = Boolean(hit);
+      if (hit) {
+        lab.el.classList.toggle("is-new", hit.novel);
+        lab.kind.textContent = hit.label;
+        lab.meta.textContent = `${hit.origin ?? ""} ${hit.kind ?? "debris"} · ${hit.range.toFixed(0)} m${hit.novel ? " · new" : ""}`;
+      }
+    }
+    this.scanSnap = {
+      ...this.scanSnap,
+      age: this.scanAge,
+      nextIn: Math.max(0, SCAN_PERIOD - this.scanAcc),
+      sweeping,
+    };
+  }
+
+  private runScan() {
+    this.scanPulse = 0;
+    this.scanAge = 0;
+    this.scanCycle += 1;
+    const ox = this.dronePos.x;
+    const oy = this.dronePos.y;
+    const oz = this.dronePos.z;
+    const hits: ScanContact[] = [];
+
+    for (const car of this.world.sim.cars) {
+      const d = Math.hypot(car.x - ox, car.z - oz);
+      if (d > SCAN_RANGE) continue;
+      const id = `veh-${car.id}`;
+      const novel = !this.learned.has(id);
+      this.learned.add(id);
+      hits.push({
+        id,
+        cls: "vehicle",
+        type: car.parked ? "parked" : car.subject ? "subject" : "traffic",
+        label: car.parked ? "Parked vehicle" : car.subject ? "Subject vehicle" : "Moving vehicle",
+        range: d,
+        anomaly: false,
+        novel,
+      });
+    }
+
+    for (const b of BUILDINGS) {
+      const d = Math.hypot(b.x - ox, b.z - oz);
+      if (d > SCAN_RANGE + Math.max(b.sx, b.sz) * 0.45) continue;
+      const id = `bldg-${b.name}`;
+      const novel = !this.learned.has(id);
+      this.learned.add(id);
+      hits.push({
+        id,
+        cls: "building",
+        type: b.kind,
+        label: b.name,
+        range: d,
+        anomaly: false,
+        novel,
+      });
+    }
+
+    for (const rig of this.world.debris) {
+      const def = rig.def;
+      const d = Math.hypot(def.x - ox, def.z - oz);
+      if (d > SCAN_RANGE) continue;
+      if (this.scanOccluded(ox, oy, oz, def.x, def.z)) continue;
+      const id = `deb-${def.id}`;
+      const novel = !this.learned.has(id);
+      this.learned.add(id);
+      hits.push({
+        id,
+        cls: "debris",
+        type: def.type,
+        kind: def.kind,
+        origin: def.origin,
+        label: def.label,
+        range: d,
+        anomaly: true,
+        novel,
+      });
+    }
+
+    hits.sort((a, b) => a.range - b.range);
+    const debrisHits = hits.filter((h) => h.cls === "debris");
+    this.scanSnap = {
+      cycle: this.scanCycle,
+      period: SCAN_PERIOD,
+      age: 0,
+      nextIn: SCAN_PERIOD,
+      sweeping: true,
+      rangeM: SCAN_RANGE,
+      contacts: hits.length,
+      vehicles: hits.filter((h) => h.cls === "vehicle").length,
+      buildings: hits.filter((h) => h.cls === "building").length,
+      debris: debrisHits.filter((h) => h.kind === "debris").length,
+      blockades: debrisHits.filter((h) => h.kind === "blockade").length,
+      anomalies: debrisHits.length,
+      novel: debrisHits.filter((h) => h.novel).length,
+      learned: this.learned.size,
+      hits: debrisHits,
+    };
+  }
+
+  private scanOccluded(ox: number, oy: number, oz: number, x: number, z: number): boolean {
+    _to.set(x - ox, 0.4 - oy, z - oz);
+    const dist = _to.length();
+    if (dist < 1.2) return false;
+    _ray.set(_v.set(ox, oy, oz), _to.normalize());
+    const hits = _ray.intersectObjects(this.world.buildings, false);
+    return hits.length > 0 && hits[0]!.distance < dist - 1.4;
   }
 
   dispose() {
@@ -1294,6 +1579,8 @@ export class GuideEngine {
     this.ro?.disconnect();
     this.controls.dispose();
     this.composer?.dispose();
+    this.scanRing.geometry.dispose();
+    (this.scanRing.material as THREE.Material).dispose();
     this.drone.geometries.forEach((g) => g.dispose());
     this.drone.materials.forEach((m) => m.dispose());
     this.drone.textures.forEach((t) => t.dispose());

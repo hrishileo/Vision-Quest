@@ -1,3 +1,6 @@
+import type { TrafficSnapshot } from "./traffic";
+import type { ScanSnapshot } from "./debris";
+
 export type Mode = "anatomy" | "controller" | "vision" | "pursuit";
 export type CamView = "orbit" | "chase" | "fpv";
 export type BuildView = "skeleton" | "finished" | "kit";
@@ -39,7 +42,13 @@ export type Telemetry = {
   targetId: number;
   pipelineStep: number;
   bbox: BBox | null;
+  traffic: TrafficSnapshot | null;
+  scan: ScanSnapshot | null;
 };
+
+export function isAir(mode: Mode | string): boolean {
+  return mode === "pursuit";
+}
 
 export const BUILD_VIEWS: { id: BuildView; label: string }[] = [
   { id: "skeleton", label: "Skeleton" },

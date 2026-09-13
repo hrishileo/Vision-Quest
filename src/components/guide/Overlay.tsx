@@ -1,15 +1,17 @@
 import {
   Aperture,
   Camera,
+  Car,
   Cpu,
   Crosshair,
   Pause,
   Play,
   Radio,
+  Scan,
 } from "lucide-react";
 import { PIPELINE, PARTS, PART_MAP } from "@/lib/guide/catalog";
 import { LOCK_LABEL, useGuide } from "@/lib/guide/store";
-import { BUILD_VIEWS, MODES, type CamView } from "@/lib/guide/types";
+import { BUILD_VIEWS, MODES, isAir, type CamView } from "@/lib/guide/types";
 import { KitPanel } from "@/components/guide/KitPanel";
 import { kitLabel } from "@/lib/bom";
 
@@ -143,6 +145,7 @@ export function Overlay() {
   const setTightness = useGuide((s) => s.setTightness);
   const tel = useGuide((s) => s.telemetry);
   const hist = useGuide((s) => s.rangeHist);
+  const air = isAir(mode);
 
   const activeId = selected ?? hovered;
   const part = activeId ? PART_MAP[activeId] : undefined;
@@ -155,11 +158,11 @@ export function Overlay() {
         : tel.lock === "acquire"
           ? "text-warn"
           : "text-muted";
-  const showPip = (mode === "vision" || mode === "pursuit") && camView !== "fpv";
+  const showPip = (mode === "vision" || air) && camView !== "fpv";
 
   return (
     <div className="pointer-events-none absolute inset-0 flex min-h-0 min-w-0 flex-col text-fg">
-      <header className="pointer-events-auto flex items-start justify-between gap-3 p-3 md:p-5">
+      <header className="pointer-events-auto z-10 flex items-start justify-between gap-3 p-3 md:p-5">
         <div className="min-w-0">
           <p className="font-mono text-2xs uppercase tracking-[0.28em] text-muted">
             Horizon Vision · HV-1
@@ -170,9 +173,11 @@ export function Overlay() {
           <p className="mt-0.5 hidden max-w-sm text-xs text-muted sm:block">
             {buildView === "kit"
               ? "Kit list · prices, fit check, build order"
-              : buildView === "finished"
-                ? "Finished · exploded assembly · hover a part for its SKU"
-                : "Skeleton · assembled HV-1 OSPREY kit"}
+              : mode === "pursuit"
+                ? "Magnificent Mile · 10 s object scan · debris and blockade watch"
+                : buildView === "finished"
+                  ? "Finished · exploded assembly · hover a part for its SKU"
+                  : "Skeleton · assembled HV-1 OSPREY kit"}
           </p>
           <div className="mt-2 flex gap-1" role="group" aria-label="Build">
             {BUILD_VIEWS.map((v) => (
@@ -257,7 +262,10 @@ export function Overlay() {
 
         <div className="relative min-w-0 flex-1">
           {showPip && (
-            <div className="pip-frame pointer-events-none absolute bottom-3 left-3 hidden aspect-video w-[min(300px,26vw)] md:block">
+            <div
+              id="cam0-pip"
+              className="pip-frame pointer-events-none absolute bottom-3 left-3 hidden aspect-video w-[min(300px,26vw)] overflow-hidden md:block"
+            >
               {tel.bbox && (
                 <div
                   className="absolute border border-lock"
@@ -323,12 +331,134 @@ export function Overlay() {
                 </h2>
                 <p className="mt-2 text-sm leading-relaxed text-muted">
                   {mode === "pursuit"
-                    ? "Orin holds a Kalman track on the selected car — camera only, no LiDAR. Click another vehicle to switch lock."
+                    ? "Orin holds a Kalman track on the rust subject — camera only, no LiDAR. It stays locked whether the car is moving or stopped at the light. Click another vehicle to switch lock."
                     : "Hover a part — the name follows the pointer. Click for the spec sheet. Drag to orbit. Press T to tour."}
                 </p>
               </>
             )}
           </div>
+
+          {mode === "pursuit" && tel.traffic && (
+            <div className="hud-panel rounded-xl p-4">
+              <p className="font-mono text-2xs uppercase tracking-[0.18em] text-subtle">
+                Traffic assessment
+              </p>
+              <h2 className="mt-1 text-lg font-medium tracking-tight">
+                {tel.traffic.loc}
+              </h2>
+              <p className="mt-0.5 font-mono text-2xs uppercase tracking-[0.12em] text-muted">
+                {tel.traffic.city} · {tel.traffic.lat.toFixed(4)}°N {Math.abs(tel.traffic.lon).toFixed(4)}°W
+              </p>
+              <dl className="mt-3 grid grid-cols-3 gap-2">
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">LOS</dt>
+                  <dd
+                    className={
+                      "mt-1 text-sm tabular-nums " +
+                      (tel.traffic.los === "E" || tel.traffic.los === "F"
+                        ? "text-alert"
+                        : tel.traffic.los === "C" || tel.traffic.los === "D"
+                          ? "text-warn"
+                          : "text-lock")
+                    }
+                  >
+                    {tel.traffic.los}
+                  </dd>
+                </div>
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">Flow</dt>
+                  <dd className="mt-1 text-sm capitalize">{tel.traffic.congestion}</dd>
+                </div>
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">Mean</dt>
+                  <dd className="mt-1 text-sm tabular-nums">{tel.traffic.meanKmh.toFixed(0)} km/h</dd>
+                </div>
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">Detect</dt>
+                  <dd className="mt-1 text-sm tabular-nums">{tel.traffic.detected}</dd>
+                </div>
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">Moving</dt>
+                  <dd className="mt-1 text-sm tabular-nums">{tel.traffic.moving}</dd>
+                </div>
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">Stop</dt>
+                  <dd className="mt-1 text-sm tabular-nums">{tel.traffic.stopped}</dd>
+                </div>
+              </dl>
+              <p className="mt-3 flex items-center gap-2 font-mono text-2xs uppercase tracking-[0.14em] text-muted">
+                <Car className="size-3" />
+                Target {tel.traffic.targetMotion} · {tel.traffic.targetSpeed.toFixed(1)} m/s
+              </p>
+              <p className="mt-1 font-mono text-2xs uppercase tracking-[0.14em] text-muted">
+                Signal {tel.traffic.signal} · queue {tel.traffic.queueM.toFixed(0)} m
+              </p>
+            </div>
+          )}
+
+          {mode === "pursuit" && tel.scan && (
+            <div className="hud-panel rounded-xl p-4">
+              <p className="font-mono text-2xs uppercase tracking-[0.18em] text-subtle">
+                Scene scan
+              </p>
+              <h2 className="mt-1 flex items-center gap-2 text-lg font-medium tracking-tight">
+                <Scan className="size-4 text-lock" />
+                {tel.scan.sweeping ? "Sweeping" : "Catalog"}
+              </h2>
+              <p className="mt-0.5 font-mono text-2xs uppercase tracking-[0.12em] text-muted">
+                Cycle {tel.scan.cycle} · next {tel.scan.nextIn.toFixed(1)} s · {tel.scan.rangeM} m
+              </p>
+              <dl className="mt-3 grid grid-cols-3 gap-2">
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">Learn</dt>
+                  <dd className="mt-1 text-sm tabular-nums">{tel.scan.learned}</dd>
+                </div>
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">Anom</dt>
+                  <dd className={"mt-1 text-sm tabular-nums " + (tel.scan.anomalies ? "text-warn" : "text-lock")}>
+                    {tel.scan.anomalies}
+                  </dd>
+                </div>
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">New</dt>
+                  <dd className={"mt-1 text-sm tabular-nums " + (tel.scan.novel ? "text-alert" : "text-muted")}>
+                    {tel.scan.novel}
+                  </dd>
+                </div>
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">Veh</dt>
+                  <dd className="mt-1 text-sm tabular-nums">{tel.scan.vehicles}</dd>
+                </div>
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">Debris</dt>
+                  <dd className="mt-1 text-sm tabular-nums">{tel.scan.debris}</dd>
+                </div>
+                <div className="rounded-md bg-elevated px-2 py-2">
+                  <dt className="font-mono text-2xs uppercase tracking-[0.12em] text-subtle">Block</dt>
+                  <dd className="mt-1 text-sm tabular-nums">{tel.scan.blockades}</dd>
+                </div>
+              </dl>
+              <ul className="mt-3 flex flex-col gap-1.5">
+                {tel.scan.hits.length === 0 ? (
+                  <li className="font-mono text-2xs uppercase tracking-[0.14em] text-muted">
+                    No debris in range
+                  </li>
+                ) : (
+                  tel.scan.hits.map((h) => (
+                    <li key={h.id} className="flex items-baseline justify-between gap-2">
+                      <span className={"text-xs " + (h.novel ? "text-alert" : "text-fg")}>
+                        {h.label}
+                      </span>
+                      <span className="font-mono text-2xs uppercase tracking-[0.12em] text-muted">
+                        {h.origin} {h.kind} · {h.range.toFixed(0)} m
+                        {h.novel ? " · new" : ""}
+                      </span>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+          )}
 
           {(mode === "vision" || mode === "pursuit") && (
             <div className="hud-panel rounded-xl p-4">
@@ -425,7 +555,7 @@ export function Overlay() {
                 </button>
               </>
             )}
-            {mode === "pursuit" && (
+            {air && (
               <div className="flex gap-1">
                 {(["chase", "orbit", "fpv"] as CamView[]).map((v) => (
                   <button
@@ -454,7 +584,7 @@ export function Overlay() {
             </button>
           </div>
 
-          {mode === "pursuit" ? (
+          {air ? (
             <>
               <SliderRow
                 label="Standoff"
@@ -525,7 +655,7 @@ export function Overlay() {
         </div>
 
         <div className="mt-2 flex gap-2 overflow-x-auto pb-1 md:hidden">
-          {PARTS.map((p) => (
+            {PARTS.map((p) => (
             <button
               key={p.id}
               type="button"
@@ -542,7 +672,7 @@ export function Overlay() {
       </footer>
 
       <div className="pointer-events-none absolute right-4 top-24 flex flex-col items-end gap-1 font-mono text-2xs tabular-nums tracking-[0.12em] text-muted md:right-[23.5rem] md:top-28">
-        {mode === "pursuit" && (
+        {air && (
           <>
             <span className={"flex items-center gap-1.5 " + lockTone}>
               <Crosshair className="size-3" />
@@ -552,6 +682,32 @@ export function Overlay() {
             <span>GS {tel.speed.toFixed(1)} m/s</span>
             <span>RNG {tel.range.toFixed(1)} m</span>
             <span>YAW {tel.yawErr.toFixed(0)}°</span>
+            {tel.traffic && (
+              <>
+                <span
+                  className={
+                    tel.traffic.los === "E" || tel.traffic.los === "F"
+                      ? "text-alert"
+                      : tel.traffic.los === "C" || tel.traffic.los === "D"
+                        ? "text-warn"
+                        : "text-lock"
+                  }
+                >
+                  LOS {tel.traffic.los} · {tel.traffic.congestion}
+                </span>
+                <span>
+                  DET {tel.traffic.detected} · MOV {tel.traffic.moving} · STP {tel.traffic.stopped}
+                </span>
+                <span className={tel.traffic.targetMotion === "stationary" ? "text-warn" : "text-lock"}>
+                  TGT {tel.traffic.targetMotion.toUpperCase()}
+                </span>
+              </>
+            )}
+            {tel.scan && (
+              <span className={tel.scan.anomalies ? "text-warn" : "text-lock"}>
+                SCAN {tel.scan.sweeping ? "SWEEP" : tel.scan.nextIn.toFixed(0) + "s"} · {tel.scan.anomalies} ANOM
+              </span>
+            )}
             <span className="flex items-center gap-1">
               <Camera className="size-3" /> {tel.fpsDetect} fps
             </span>

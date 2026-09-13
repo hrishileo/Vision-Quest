@@ -1086,7 +1086,7 @@ export function buildDrone(): DroneBuild {
   ribbon.rotation.x = -0.35;
   camBody.add(adapter, boardCam, camFace, barrel, glass, hood, csiClamp);
 
-  const droneCam = new THREE.PerspectiveCamera(70, 16 / 9, 0.04, 90);
+  const droneCam = new THREE.PerspectiveCamera(70, 16 / 9, 0.04, 180);
   droneCam.position.set(0, 0, 0.034);
   droneCam.rotation.y = Math.PI;
   camBody.add(droneCam);

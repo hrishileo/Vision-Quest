@@ -15,7 +15,7 @@ export const Route = createRootRoute({
       {
         name: "description",
         content:
-          "Vision Quest — Horizon Vision 3D briefing. Camera-based FSD and vehicle tracking on Jetson Orin.",
+          "Vision Quest — Horizon Vision 3D briefing and Mag Mile pursuit. Camera lock, traffic assessment, 10-second debris scan.",
       },
     ],
     links: [
@@ -23,10 +23,6 @@ export const Route = createRootRoute({
       { rel: "stylesheet", href: appCss },
       { rel: "manifest", href: "/__grok/manifest.webmanifest" },
       { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap",
-      },
     ],
   }),
   component: () => (

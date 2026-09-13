@@ -2,7 +2,7 @@
 
 Interactive 3D briefing for the **Horizon Vision** flight article — camera-based FSD and vehicle tracking on a Jetson Orin.
 
-Built to walk investors, friends, and employers through the machine. Not a slide deck: a studio model you can explode, inspect, and watch run.
+Built to walk investors, friends, and employers through the machine. Not a slide deck: a studio model you can explode, inspect, and watch run. **Pursuit** flies the HV-1 over Chicago’s Magnificent Mile.
 
 ## What it is
 
@@ -13,7 +13,7 @@ Vision Quest is the presentation layer for that airframe:
 1. **Airframe** — HV-1 OSPREY kit geometry. Hover a part for its SKU. Click for the spec sheet.
 2. **Controller** — live attitude demo, PID bars, mixer, IMU axes.
 3. **Vision FSD** — camera frustum tracks the target, lock beam, detection pipeline, picture-in-picture.
-4. **Pursuit** — oval track, Kalman-style track hold, chase / orbit / FPV.
+4. **Pursuit** — Michigan Ave & Chicago Ave, IDM traffic, Kalman vehicle lock (moving or stopped), CAM0 inset, and a 10-second scene scan that learns objects in range and classifies debris / blockades (manmade and natural).
 
 **Skeleton** is the assembled HV-1 OSPREY kit (Creo-style carbon airframe + real parts). **Finished** is the exploded assembly. **Kit** is the real BOM: price list, fit check, and build order.
 

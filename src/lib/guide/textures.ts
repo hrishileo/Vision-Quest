@@ -69,7 +69,6 @@ export function loadProductMap(url: string, repeat = 1): THREE.Texture {
   tex.wrapS = repeat > 1 ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
   tex.wrapT = repeat > 1 ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
   if (repeat > 1) tex.repeat.set(repeat, repeat);
-  tex.needsUpdate = true;
   return tex;
 }
 
@@ -210,6 +209,24 @@ export function makeAsphaltTexture(): THREE.CanvasTexture {
     oval(0.91);
     ctx.stroke();
   });
+}
+
+export function makeCityAsphalt(): THREE.CanvasTexture {
+  return canvasTex(
+    512,
+    (ctx, size) => {
+      ctx.fillStyle = "#2a2c30";
+      ctx.fillRect(0, 0, size, size);
+      for (let i = 0; i < 2800; i++) {
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        const n = 30 + Math.random() * 20;
+        ctx.fillStyle = `rgb(${n},${n + 2},${n - 2})`;
+        ctx.fillRect(x, y, 2, 2);
+      }
+    },
+    10,
+  );
 }
 
 export function makePcbTexture(): THREE.CanvasTexture {

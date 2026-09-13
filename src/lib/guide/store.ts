@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { BuildView, CamView, LockState, Mode, Telemetry } from "./types";
+import { isAir } from "./types";
 
 const DEFAULT_TELEMETRY: Telemetry = {
   alt: 0,
@@ -18,6 +19,8 @@ const DEFAULT_TELEMETRY: Telemetry = {
   targetId: 0,
   pipelineStep: 0,
   bbox: null,
+  traffic: null,
+  scan: null,
 };
 
 type GuideState = {
@@ -99,9 +102,12 @@ export const useGuide = create<GuideState>((set) => ({
         next.shell = 1;
         next.camView = "orbit";
       }
-      if (mode === "pursuit") {
+      if (isAir(mode)) {
         next.explode = 0;
         next.shell = 1;
+        next.selected = null;
+        next.touring = false;
+        if (s.buildView === "kit") next.buildView = "skeleton";
         if (s.camView === "orbit") next.camView = "chase";
       }
       return next;

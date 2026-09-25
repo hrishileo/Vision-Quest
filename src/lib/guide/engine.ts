@@ -24,6 +24,20 @@ import {
   type ScanContact,
   type ScanSnapshot,
 } from "./debris";
+import { isVisibleInCamera } from "./visibility";
+import {
+  CORPUS_HEIGHT,
+  CORPUS_WIDTH,
+  CorpusSession,
+  cameraRecord,
+  debrisRecord,
+  flipRgbaBottomUp,
+  makeFrame,
+  rgbaToPng,
+  vehicleRecord,
+  writeBoxCorners,
+  type CorpusObject,
+} from "./corpus";
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -142,6 +156,17 @@ export class GuideEngine {
   private bbox: BBox | null = null;
   private pipelineStep = 0;
   private mix: [number, number, number, number] = [0.18, 0.18, 0.18, 0.18];
+  private corpus = new CorpusSession();
+  private corpusTarget: THREE.WebGLRenderTarget | null = null;
+  private corpusPixels: Uint8Array | null = null;
+  private corpusBox = new THREE.Box3();
+  private corpusCorners = Array.from({ length: 8 }, () => new THREE.Vector3());
+  private corpusNdc = new THREE.Vector3();
+  private corpusTo = new THREE.Vector3();
+  private corpusSample = new THREE.Vector3();
+  private corpusAim = new THREE.Vector3();
+  private corpusCamPos = new THREE.Vector3();
+  private corpusRay = new THREE.Raycaster();
   private studioCarPhase = 0;
   private wasTouring = false;
   private lastMode: string = "anatomy";
@@ -457,17 +482,34 @@ export class GuideEngine {
     this.renderer.setAnimationLoop(this.loop);
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(host);
-    const self = this;
-    window.__trafficTest = () => self.world.sim.diagnostics();
+    window.__trafficTest = () => this.world.sim.diagnostics();
     window.__scanTest = () => ({
-      cycle: self.scanSnap.cycle,
-      learned: self.learned.size,
-      anomalies: self.scanSnap.anomalies,
-      debris: self.scanSnap.debris,
-      blockades: self.scanSnap.blockades,
-      nextIn: self.scanSnap.nextIn,
-      hits: self.scanSnap.hits.filter((h) => h.anomaly).map((h) => h.type),
+      cycle: this.scanSnap.cycle,
+      learned: this.learned.size,
+      anomalies: this.scanSnap.anomalies,
+      debris: this.scanSnap.debris,
+      blockades: this.scanSnap.blockades,
+      nextIn: this.scanSnap.nextIn,
+      hits: this.scanSnap.hits.filter((h) => h.anomaly).map((h) => h.type),
     });
+    window.__corpus = {
+      start: (hz) => {
+        const guide = useGuide.getState();
+        if (hz !== undefined) guide.setCorpusHz(hz);
+        guide.setCorpusRecording(true);
+      },
+      stop: () => useGuide.getState().setCorpusRecording(false),
+      download: () => this.downloadCorpus(),
+      zip: () => this.corpus.zip(),
+      status: () => ({
+        recording: this.corpus.open,
+        frames: this.corpus.frames.length,
+        hz: this.corpus.hz,
+        achievedHz: this.corpus.achievedHz(),
+        t: this.world.sim.time,
+        runId: this.corpus.runId,
+      }),
+    };
   }
 
   private makeFrustum(): THREE.LineSegments {
@@ -780,6 +822,7 @@ export class GuideEngine {
   }
 
   private onModeChange(from: string, to: string) {
+    if (!isAir(to)) this.finishCorpus();
     this.idle = 0;
     this.lockBeam.visible = false;
     this.predMesh.visible = false;
@@ -1075,17 +1118,18 @@ export class GuideEngine {
     const camPos = this.drone.droneCam.getWorldPosition(_cam);
     const detected: number[] = [];
     for (const car of sim.cars) {
-      _ndc.set(car.x, 0.6, car.z).project(this.drone.droneCam);
-      const inView =
-        Math.abs(_ndc.x) < 0.92 && Math.abs(_ndc.y) < 0.92 && _ndc.z > 0 && _ndc.z < 1;
-      if (!inView) continue;
-      _to.set(car.x, 1, car.z).sub(camPos);
-      const distHit = _to.length();
-      if (distHit < 0.4) continue;
-      _ray.set(camPos, _to.normalize());
-      const hits = _ray.intersectObjects(this.world.buildings, false);
-      const occluded = hits.length > 0 && hits[0]!.distance < distHit - 1.2;
-      if (!occluded) detected.push(car.id);
+      if (
+        isVisibleInCamera(
+          this.drone.droneCam,
+          camPos,
+          _v.set(car.x, 0.6, car.z),
+          _v2.set(car.x, 1, car.z),
+          this.world.buildings,
+          { ndc: _ndc, to: _to, ray: _ray },
+        )
+      ) {
+        detected.push(car.id);
+      }
     }
     this.detectedIds = detected;
     this.traffic = sim.assess(detected, this.targetIndex);
@@ -1405,6 +1449,7 @@ export class GuideEngine {
       this.boxHelper.visible = visBox;
     }
     this.frustum.visible = helperOn && !fpv;
+    this.captureCorpus();
   }
 
   private measurePip(): { x: number; y: number; w: number; h: number } | null {
@@ -1566,6 +1611,161 @@ export class GuideEngine {
     return hits.length > 0 && hits[0]!.distance < dist - 1.4;
   }
 
+  private finishCorpus() {
+    if (this.corpus.open) this.corpus.stop();
+    if (useGuide.getState().corpusRecording) useGuide.getState().setCorpusRecording(false);
+  }
+
+  private captureCorpus() {
+    const s = useGuide.getState();
+    if (!isAir(s.mode)) return;
+    if (s.corpusRecording && !this.corpus.open) {
+      this.corpus.start(s.corpusHz);
+      s.setCorpusStats(0, 0);
+    } else if (!s.corpusRecording && this.corpus.open) {
+      this.corpus.stop();
+    }
+    if (!this.corpus.open || s.paused) return;
+    if (!this.corpus.due(this.world.sim.time)) return;
+    this.sampleCorpusFrame();
+  }
+
+  private ensureCorpusTarget(): THREE.WebGLRenderTarget {
+    if (!this.corpusTarget) {
+      this.corpusTarget = new THREE.WebGLRenderTarget(CORPUS_WIDTH, CORPUS_HEIGHT, {
+        type: THREE.UnsignedByteType,
+        format: THREE.RGBAFormat,
+        colorSpace: THREE.SRGBColorSpace,
+        depthBuffer: true,
+        stencilBuffer: false,
+      });
+      this.corpusPixels = new Uint8Array(CORPUS_WIDTH * CORPUS_HEIGHT * 4);
+    }
+    return this.corpusTarget;
+  }
+
+  private corpusObjects(cam: THREE.PerspectiveCamera): CorpusObject[] {
+    const camPos = cam.getWorldPosition(this.corpusCamPos);
+    const scratch = { ndc: this.corpusNdc, to: this.corpusTo, ray: this.corpusRay };
+    const objects: CorpusObject[] = [];
+    const cars = [...this.world.sim.cars].sort((a, b) => a.id - b.id);
+    for (const car of cars) {
+      const rig = this.world.cars.find((item) => item.id === car.id);
+      if (!rig) continue;
+      if (
+        !isVisibleInCamera(
+          cam,
+          camPos,
+          this.corpusSample.set(car.x, 0.6, car.z),
+          this.corpusAim.set(car.x, 1, car.z),
+          this.world.buildings,
+          scratch,
+        )
+      ) {
+        continue;
+      }
+      writeBoxCorners(this.corpusBox.setFromObject(rig.group), this.corpusCorners);
+      const rec = vehicleRecord(car, this.corpusCorners, cam, CORPUS_WIDTH, CORPUS_HEIGHT);
+      if (rec) objects.push(rec);
+    }
+    const debris = [...this.world.debris].sort((a, b) => a.id - b.id);
+    for (const rig of debris) {
+      const box = this.corpusBox.setFromObject(rig.group);
+      if (box.isEmpty()) continue;
+      box.getCenter(this.corpusSample);
+      this.corpusAim.copy(this.corpusSample);
+      if (
+        !isVisibleInCamera(
+          cam,
+          camPos,
+          this.corpusSample,
+          this.corpusAim,
+          this.world.buildings,
+          scratch,
+        )
+      ) {
+        continue;
+      }
+      writeBoxCorners(box, this.corpusCorners);
+      const rec = debrisRecord(rig.def, this.corpusCorners, cam, CORPUS_WIDTH, CORPUS_HEIGHT);
+      if (rec) objects.push(rec);
+    }
+    return objects;
+  }
+
+  private sampleCorpusFrame() {
+    const cam = this.drone.droneCam;
+    const prevAspect = cam.aspect;
+    cam.aspect = CORPUS_WIDTH / CORPUS_HEIGHT;
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+
+    const hidden = [
+      this.frustum,
+      this.drone.group,
+      this.lockBeam,
+      this.predMesh,
+      this.boxHelper,
+      this.scanRing,
+    ];
+    const vis = hidden.map((obj) => obj.visible);
+    for (const obj of hidden) obj.visible = false;
+
+    const renderer = this.renderer;
+    const prevTarget = renderer.getRenderTarget();
+    const prevScissorTest = renderer.getScissorTest();
+    const viewport = renderer.getViewport(new THREE.Vector4());
+    const scissor = renderer.getScissor(new THREE.Vector4());
+
+    try {
+      const objects = this.corpusObjects(cam);
+      const frame = makeFrame({
+        index: this.corpus.frames.length,
+        t: this.world.sim.time,
+        hz: this.corpus.hz,
+        camera: cameraRecord(cam, CORPUS_WIDTH, CORPUS_HEIGHT),
+        objects,
+      });
+      const target = this.ensureCorpusTarget();
+      renderer.setRenderTarget(target);
+      renderer.setScissorTest(false);
+      renderer.setViewport(0, 0, CORPUS_WIDTH, CORPUS_HEIGHT);
+      renderer.clear();
+      renderer.render(this.scene, cam);
+      const pixels = this.corpusPixels;
+      if (!pixels) return;
+      renderer.readRenderTargetPixels(target, 0, 0, CORPUS_WIDTH, CORPUS_HEIGHT, pixels);
+      const png = rgbaToPng(flipRgbaBottomUp(pixels, CORPUS_WIDTH, CORPUS_HEIGHT), CORPUS_WIDTH, CORPUS_HEIGHT);
+      this.corpus.push(frame, png);
+      useGuide.getState().setCorpusStats(this.corpus.frames.length, this.corpus.achievedHz());
+    } finally {
+      renderer.setRenderTarget(prevTarget);
+      renderer.setViewport(viewport);
+      renderer.setScissor(scissor);
+      renderer.setScissorTest(prevScissorTest);
+      cam.aspect = prevAspect;
+      cam.updateProjectionMatrix();
+      hidden.forEach((obj, i) => {
+        obj.visible = vis[i]!;
+      });
+    }
+  }
+
+  private async downloadCorpus() {
+    const bytes = await this.corpus.zip();
+    const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], {
+      type: "application/zip",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${this.corpus.runId || "cam0-corpus"}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
   dispose() {
     this.disposed = true;
     this.renderer.setAnimationLoop(null);
@@ -1602,7 +1802,9 @@ export class GuideEngine {
     (this.predMesh.material as THREE.Material).dispose();
     this.frustum.geometry.dispose();
     (this.frustum.material as THREE.Material).dispose();
+    this.corpusTarget?.dispose();
     this.renderer.dispose();
+    if (window.__corpus) delete window.__corpus;
     this.tip.remove();
     this.labels.domElement.remove();
     this.renderer.domElement.remove();

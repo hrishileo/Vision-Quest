@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import {
   CORPUS_HEIGHT,
@@ -11,6 +14,7 @@ import {
   cameraRecord,
   clampCorpusHz,
   corpusArchiveEntries,
+  corpusReadme,
   debrisRecord,
   frameToYolo,
   framesToJsonl,
@@ -267,6 +271,11 @@ describe("label policy and export schema", () => {
     assert.match(readme, /ground truth/i);
     assert.match(readme, /not detections/i);
     assert.match(readme, /unknown/);
+    assert.match(readme, /\+X is east/);
+    assert.match(readme, /YXZ/);
+    assert.match(readme, /pinhole centre/);
+    assert.match(readme, /top-left corner/);
+    assert.match(readme, /mich-nb-0/);
     const yaml = new TextDecoder().decode(restored[2]!.data);
     assert.equal(yaml, DATA_YAML);
     assert.match(yaml, /0: vehicle/);
@@ -277,6 +286,54 @@ describe("label policy and export schema", () => {
     const yolo = new TextDecoder().decode(restored[4]!.data);
     assert.equal(yolo.startsWith("0 "), true);
     assert.equal(yolo.endsWith("\n"), true);
+  });
+});
+
+describe("published CAM0 sample", () => {
+  const fixturePath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "__fixtures__",
+    "cam0-sample.labels.jsonl",
+  );
+
+  it("parses the fixture against the current schema", () => {
+    const frames = parseJsonl(readFileSync(fixturePath, "utf8"));
+    assert.ok(frames.length >= 20 && frames.length <= 50);
+    for (let i = 0; i < frames.length; i++) {
+      const frame = frames[i]!;
+      assert.equal(frame.index, i);
+      assert.equal(frame.rateHz, 10);
+      assert.deepEqual(validateFrame(frame), [], `frame ${i}`);
+      if (i > 0) assert.ok(frame.t > frames[i - 1]!.t);
+    }
+    assert.ok(Math.abs(achievedRate(frames) - 10) < 1e-9);
+    const classes = new Set(frames.flatMap((frame) => frame.objects.map((obj) => obj.class)));
+    assert.ok(classes.has("vehicle"));
+    assert.ok(classes.has("unknown"));
+  });
+
+  it("documents how to invert the projection", () => {
+    const readme = corpusReadme({
+      runId: "cam0-corpus-test",
+      frames: 1,
+      hz: 10,
+      achievedHz: 10,
+      t0: 0,
+      t1: 0,
+      width: CORPUS_WIDTH,
+      height: CORPUS_HEIGHT,
+    });
+    assert.match(readme, /ground plane is y = 0/);
+    assert.match(readme, /\+Z is south/);
+    assert.match(readme, /radians/);
+    assert.match(readme, /order `YXZ`/);
+    assert.match(readme, /Positive pitch rotates the look direction toward \+Y/);
+    assert.match(readme, /dir_camera = \(X, Y, -1\)/);
+    assert.match(readme, /not its centre/);
+    assert.match(readme, /scalar lane speed/);
+    assert.match(readme, /mich-sb-2/);
+    assert.match(readme, /chi-eb-0/);
+    assert.match(readme, /internal parked id `park` is not written/);
   });
 });
 

@@ -424,6 +424,48 @@ Vehicles use class \`vehicle\` (YOLO id 0). Every debris or blockade object uses
 An object is labeled only when its sample point passes the Pursuit CAM0 check: projected NDC inside ±${VIEW_NDC}, depth in (0, 1), and the ray from the camera to the sample is not blocked by a building. Vehicles use the lock's sample \`(x, 0.6, z)\` and aim \`(x, 1, z)\`. Debris uses the mesh center. The box itself is the projected mesh bounds, clipped to the image.
 
 The 10-second scene scan is a range catalog from the airframe. It is not the camera frustum. This corpus uses the scan's object identities and the camera's visibility test.
+
+## Conventions
+
+World frame, the same one the Mag Mile scene uses:
+
+- Right-handed. +Y is up. The ground plane is y = 0.
+- +X is east. +Z is south, so −Z is north.
+- The origin is the center of Michigan Ave & Chicago Ave.
+- Positions and \`camera.agl\` are metres. \`camera.agl\` equals \`camera.position.y\`.
+- \`speed\` is metres per second. \`t\` is seconds. \`bbox\`, \`fx\`, \`fy\`, \`cx\`, and \`cy\` are pixels. \`fovY\` is degrees. \`yaw\`, \`pitch\`, and \`roll\` are radians.
+
+\`camera.position\` is the pinhole centre: the world position of the perspective camera, which sits at the lens. It is not the drone body's origin.
+
+\`yaw\`, \`pitch\`, and \`roll\` are that camera's world orientation as a Three.js Euler in order \`YXZ\`. The components are \`(x, y, z) = (pitch, yaw, roll)\`. Build the rotation with \`Matrix4.makeRotationFromEuler\` in that order. The matrix columns are the camera's +X, +Y, and +Z axes in world coordinates.
+
+The camera looks down its local −Z. Camera +X is image right. Camera +Y is image up, which is the opposite of pixel +v.
+
+At yaw = pitch = roll = 0 the optical axis points toward world −Z (north), camera +X is world +X (east), and camera +Y is world +Y (up).
+
+- Positive yaw rotates the look direction from −Z toward −X (north toward west).
+- Positive pitch rotates the look direction toward +Y (up). Negative pitch looks down at the road.
+- Positive roll rotates camera +X toward camera +Y.
+
+To turn a pixel back into a world ray, take \`(u, v)\` in the same pixel space as \`bbox\` (origin at the top-left corner, +u to the right, +v down):
+
+\`\`\`
+X = (u - cx) / fx
+Y = (cy - v) / fy
+dir_camera = (X, Y, -1)
+\`\`\`
+
+Rotate \`dir_camera\` by the YXZ matrix and start the ray at \`camera.position\`. On the ground plane y = 0 the hit is \`camera.position + t * dir_world\` with \`t = -camera.position.y / dir_world.y\` when \`dir_world.y\` is negative.
+
+\`bbox\` is \`{x, y, w, h}\` in pixels. \`x\` and \`y\` are the top-left corner of the axis-aligned box, not its centre. The box is the projected mesh, clipped to the image. \`position\` is the rig origin on the ground (y = 0), not the centre of that box, so compare a ground-plane hit to \`position\`.
+
+\`speed\` is the scalar lane speed in the lane's direction of travel, not a world velocity vector. It is 0 when a vehicle is stopped or parked. Debris and blockades have \`speed: null\`.
+
+\`laneId\` is \`{road}-{bound}-{index}\` or \`null\`.
+
+- \`mich\` lanes run along Z. \`nb\` travels toward −Z (north) and \`sb\` toward +Z (south). Index 0 is the lane nearest the centerline; the index increases toward the curb. The ids are \`mich-nb-0\`, \`mich-nb-1\`, \`mich-nb-2\`, \`mich-sb-0\`, \`mich-sb-1\`, \`mich-sb-2\`.
+- \`chi\` lanes run along X. \`eb\` travels toward +X (east) and \`wb\` toward −X (west). The ids are \`chi-eb-0\`, \`chi-eb-1\`, \`chi-wb-0\`, \`chi-wb-1\`.
+- \`null\` means the object is not on a travel lane: parked or on the curb, or any debris or blockade. The sim's internal parked id \`park\` is not written into the file.
 `;
 }
 

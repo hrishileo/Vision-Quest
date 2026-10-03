@@ -1,7 +1,6 @@
 import {
   BUILDINGS,
   CAR_L,
-  LANE_BY_ID,
   LANES,
   MAG_MILE,
   PARK_X,
@@ -10,11 +9,12 @@ import {
   buildingAabb,
   carHitsBuilding,
   inIntersection,
+  laneById,
   lanePose,
   overlapsRoad,
   wrapS,
   type LaneDef,
-} from "./city";
+} from "./city.ts";
 
 const A_MAX = 1.45;
 const B_COM = 2.15;
@@ -22,6 +22,7 @@ const HEADWAY = 1.35;
 const S0 = 2.3;
 const DELTA = 4;
 const STEP = 1 / 30;
+export const SIM_STEP = STEP;
 const CYCLE = 64;
 const CAR_LEN_PAD = CAR_L;
 
@@ -69,7 +70,20 @@ export type SimCar = {
   subject: boolean;
   stallUntil: number;
   nextStall: number;
+  /** Ordered lane ids. Null keeps the default loop on the current lane. */
+  route: string[] | null;
+  routeIndex: number;
+  /** Cohort flag for the detour study. Independent of whether the route turns. */
+  routed: boolean;
 };
+
+/** Debris occupies [s0, s1] on a lane. Cars stop at s0. */
+export type LaneBlock = { laneId: string; s0: number; s1: number };
+
+/** Leave `from` at fromS and enter `to` at toS. Poses should meet. */
+export type RouteLink = { from: string; to: string; fromS: number; toS: number };
+
+const NB_FROM_CURB = ["mich-nb-2", "mich-nb-1", "mich-nb-0"];
 
 export type TrafficDiag = {
   n: number;
@@ -108,7 +122,7 @@ function bumpS(s: number, ds: number, length: number): number {
 }
 
 function poseCar(car: SimCar) {
-  const lane = LANE_BY_ID[car.laneId];
+  const lane = laneById(car.laneId);
   if (!lane) return;
   const p = lanePose(lane, car.s);
   car.x = p.x;
@@ -134,6 +148,41 @@ function clearOfIntersection(lane: LaneDef, s: number): number {
   return t;
 }
 
+export function createSimCar(init: {
+  id: number;
+  laneId: string;
+  s: number;
+  v?: number;
+  v0?: number;
+  length?: number;
+  color?: number;
+  route?: string[] | null;
+  routed?: boolean;
+}): SimCar {
+  const lane = laneById(init.laneId);
+  return {
+    id: init.id,
+    laneId: init.laneId,
+    s: init.s,
+    v: init.v ?? 0,
+    v0: init.v0 ?? 8,
+    x: 0,
+    z: 0,
+    yaw: lane?.heading ?? 0,
+    vx: 0,
+    vz: 0,
+    parked: false,
+    color: init.color ?? 0x8a9098,
+    length: init.length ?? 4.4,
+    subject: false,
+    stallUntil: -1,
+    nextStall: 1e9,
+    route: init.route ? [...init.route] : null,
+    routeIndex: 0,
+    routed: init.routed ?? false,
+  };
+}
+
 function losFromKmh(kmh: number): { los: LosGrade; congestion: Congestion } {
   let los: LosGrade;
   if (kmh >= 42) los = "A";
@@ -154,6 +203,8 @@ export class TrafficSim {
   nsLit: SignalLit = "g";
   ewLit: SignalLit = "r";
   signal: TrafficSnapshot["signal"] = "NS";
+  blocks: LaneBlock[] = [];
+  links: RouteLink[] = [];
   private acc = 0;
   private rng: () => number = mulberry32(1);
 
@@ -166,8 +217,47 @@ export class TrafficSim {
     this.time = 0;
     this.acc = 0;
     this.cars = [];
+    this.blocks = [];
+    this.links = [];
     this.syncSignals();
     this.spawn();
+  }
+
+  /** Replace the fleet. Used by the detour scenario; the default pursuit spawn does not call this. */
+  loadFleet(cars: SimCar[], opts?: { seed?: number; blocks?: LaneBlock[]; links?: RouteLink[] }) {
+    this.rng = mulberry32((opts?.seed ?? 1) >>> 0);
+    this.time = 0;
+    this.acc = 0;
+    this.cars = cars;
+    this.blocks = opts?.blocks?.map((b) => ({ ...b })) ?? [];
+    this.links = opts?.links?.map((l) => ({ ...l })) ?? [];
+    this.subjectId = cars.find((c) => c.subject)?.id ?? cars[0]?.id ?? 0;
+    this.syncSignals();
+    for (const car of this.cars) poseCar(car);
+  }
+
+  /** Advance an exact number of 1/30 s steps. The frame accumulator is left alone. */
+  advance(steps: number) {
+    const n = Math.max(0, Math.floor(steps));
+    for (let i = 0; i < n; i++) this.integrate(STEP);
+  }
+
+  setRoute(carId: number, laneIds: readonly string[] | null): boolean {
+    const car = this.cars.find((c) => c.id === carId);
+    if (!car || car.parked) return false;
+    if (!laneIds || laneIds.length === 0) {
+      car.route = null;
+      car.routeIndex = 0;
+      return true;
+    }
+    if (laneIds[0] !== car.laneId) return false;
+    for (const id of laneIds) {
+      if (!laneById(id)) return false;
+    }
+    car.route = [...laneIds];
+    car.routeIndex = 0;
+    car.routed = true;
+    return true;
   }
 
   step(dt: number) {
@@ -223,7 +313,7 @@ export class TrafficSim {
       const arr = byLane.get(c.laneId) ?? [];
       arr.push(c);
       byLane.set(c.laneId, arr);
-      const lane = LANE_BY_ID[c.laneId];
+      const lane = laneById(c.laneId);
       if (!lane) {
         offLane = true;
         continue;
@@ -236,12 +326,13 @@ export class TrafficSim {
     }
     for (const [, list] of byLane) {
       list.sort((a, b) => a.s - b.s);
-      const lane = LANE_BY_ID[list[0]!.laneId]!;
+      const lane = laneById(list[0]!.laneId)!;
       for (let i = 0; i < list.length; i++) {
         const a = list[i]!;
-        const b = list[(i + 1) % list.length]!;
+        const b = lane.finite ? list[i + 1] : list[(i + 1) % list.length];
+        if (!b) continue;
         let ds = b.s - a.s;
-        if (ds <= 0.05) ds += lane.length;
+        if (ds <= 0.05 && !lane.finite) ds += lane.length;
         const gap = ds - (a.length + b.length) * 0.5;
         minGap = Math.min(minGap, gap);
         if (gap < 0.15) overlap = true;
@@ -302,6 +393,11 @@ export class TrafficSim {
   private integrate(dt: number) {
     this.time += dt;
     this.syncSignals();
+    if (this.blocks.length) {
+      for (const c of this.cars) {
+        if (!c.parked) this.maybeMerge(c);
+      }
+    }
     const groups = new Map<string, SimCar[]>();
     for (const c of this.cars) {
       if (c.parked) continue;
@@ -310,19 +406,19 @@ export class TrafficSim {
       groups.set(c.laneId, list);
     }
     for (const [laneId, list] of groups) {
-      const lane = LANE_BY_ID[laneId];
+      const lane = laneById(laneId);
       if (!lane) continue;
       list.sort((a, b) => a.s - b.s);
       for (let i = 0; i < list.length; i++) {
         const car = list[i]!;
-        const leader = list[(i + 1) % list.length]!;
+        const leader = lane.finite ? (list[i + 1] ?? null) : list[(i + 1) % list.length]!;
         this.follow(car, leader, lane, dt);
       }
     }
     for (const c of this.cars) poseCar(c);
   }
 
-  private follow(car: SimCar, leader: SimCar, lane: LaneDef, dt: number) {
+  private follow(car: SimCar, leader: SimCar | null, lane: LaneDef, dt: number) {
     const stalled = car.subject && this.time < car.stallUntil;
     let v0 = stalled ? 0.02 : car.v0;
     if (car.subject && !stalled && this.time >= car.nextStall) {
@@ -336,24 +432,45 @@ export class TrafficSim {
         car.nextStall = this.time + 4;
       }
     }
+    if (lane.vMax !== undefined && v0 > lane.vMax) v0 = lane.vMax;
 
-    let ds = leader.s - car.s;
-    if (ds <= 0.08) ds += lane.length;
-    let gap = ds - (car.length + leader.length) * 0.5;
-    let vLead = leader.v;
+    let gap: number;
+    let vLead: number;
+    if (leader) {
+      let ds = leader.s - car.s;
+      if (ds <= 0.08) ds += lane.length;
+      gap = ds - (car.length + leader.length) * 0.5;
+      vLead = leader.v;
+    } else {
+      gap = 200;
+      vLead = v0;
+    }
 
-    const distStop = wrapS(lane.stopS - car.s, lane.length);
-    const pastStop = distStop > lane.length * 0.72;
-    const lit = this.litFor(lane.approach);
-    if (!pastStop && distStop > 0.4) {
-      const canStop = (car.v * car.v) / (2 * B_COM) < distStop + 0.8;
-      const hold = lit === "r" || (lit === "y" && canStop);
-      if (hold) {
-        const stopGap = distStop - car.length * 0.5;
-        if (stopGap < gap) {
-          gap = stopGap;
-          vLead = 0;
+    let pastStop = false;
+    let lit: SignalLit = "g";
+    if (lane.signal !== false) {
+      const distStop = wrapS(lane.stopS - car.s, lane.length);
+      pastStop = distStop > lane.length * 0.72;
+      lit = this.litFor(lane.approach);
+      if (!pastStop && distStop > 0.4) {
+        const canStop = (car.v * car.v) / (2 * B_COM) < distStop + 0.8;
+        const hold = lit === "r" || (lit === "y" && canStop);
+        if (hold) {
+          const stopGap = distStop - car.length * 0.5;
+          if (stopGap < gap) {
+            gap = stopGap;
+            vLead = 0;
+          }
         }
+      }
+    }
+
+    const block = this.blockAhead(lane.id, car.s);
+    if (block) {
+      const stopGap = block.s0 - car.s - car.length * 0.5 - 0.5;
+      if (stopGap < gap) {
+        gap = stopGap;
+        vLead = 0;
       }
     }
 
@@ -363,14 +480,16 @@ export class TrafficSim {
     car.v = Math.max(0, car.v + a * dt);
     if (v0 < 0.1) car.v = Math.max(0, car.v - B_COM * dt);
     let next = car.s + car.v * dt;
-    let leadS = leader.s;
-    if (leadS <= car.s + 0.08) leadS += lane.length;
-    const maxS = leadS - (car.length + leader.length) * 0.5 - S0;
-    if (next > maxS) {
-      next = maxS;
-      car.v = Math.min(car.v, vLead);
+    if (leader) {
+      let leadS = leader.s;
+      if (leadS <= car.s + 0.08) leadS += lane.length;
+      const maxS = leadS - (car.length + leader.length) * 0.5 - S0;
+      if (next > maxS) {
+        next = maxS;
+        car.v = Math.min(car.v, vLead);
+      }
     }
-    if (!pastStop && lit !== "g") {
+    if (lane.signal !== false && !pastStop && lit !== "g") {
       const holdLine = lane.stopS - car.length * 0.5 - 0.35;
       const toLine = wrapS(holdLine - car.s, lane.length);
       if (toLine < 18 && next > holdLine && car.s <= holdLine + 0.05) {
@@ -378,7 +497,100 @@ export class TrafficSim {
         car.v = 0;
       }
     }
-    car.s = wrapS(next, lane.length);
+    if (block) {
+      const limit = block.s0 - car.length * 0.5 - 0.5;
+      if (next > limit && car.s <= limit + 0.05) {
+        next = limit;
+        car.v = 0;
+      }
+    }
+    if (this.transferIfDue(car, next)) return;
+    car.s = lane.finite ? Math.max(0, Math.min(lane.length, next)) : wrapS(next, lane.length);
+  }
+
+  private blockAhead(laneId: string, s: number): LaneBlock | null {
+    let best: LaneBlock | null = null;
+    for (const block of this.blocks) {
+      if (block.laneId !== laneId || block.s0 <= s) continue;
+      if (!best || block.s0 < best.s0) best = block;
+    }
+    return best;
+  }
+
+  private yieldsToBlock(car: SimCar): boolean {
+    if (!car.route || car.route.length === 0) return true;
+    return car.routeIndex >= car.route.length - 1;
+  }
+
+  /** Step toward an open lane in the same direction when debris is close and a gap exists. */
+  private maybeMerge(car: SimCar): boolean {
+    if (!this.yieldsToBlock(car)) return false;
+    const block = this.blockAhead(car.laneId, car.s);
+    if (!block) return false;
+    const dist = block.s0 - car.s;
+    if (dist <= 0.5 || dist > 24) return false;
+    const from = NB_FROM_CURB.indexOf(car.laneId);
+    if (from < 0) return false;
+    let dest: string | null = null;
+    for (let i = from + 1; i < NB_FROM_CURB.length; i++) {
+      const id = NB_FROM_CURB[i]!;
+      if (!this.blocks.some((b) => b.laneId === id)) {
+        dest = id;
+        break;
+      }
+    }
+    if (!dest || !this.gapAt(dest, car.s, car.length)) return false;
+    car.laneId = dest;
+    car.route = null;
+    car.routeIndex = 0;
+    return true;
+  }
+
+  private gapAt(laneId: string, s: number, length: number): boolean {
+    const lane = laneById(laneId);
+    if (!lane) return false;
+    const need = length * 0.5 + S0 + 2.4;
+    for (const other of this.cars) {
+      if (other.parked || other.laneId !== laneId) continue;
+      let ds = Math.abs(other.s - s);
+      if (!lane.finite) ds = Math.min(ds, lane.length - ds);
+      if (ds < need + other.length * 0.5) return false;
+    }
+    return true;
+  }
+
+  private entryClear(laneId: string, s: number, self: SimCar): boolean {
+    const lane = laneById(laneId);
+    if (!lane) return false;
+    const need = self.length * 0.5 + S0 + 1.2;
+    for (const other of this.cars) {
+      if (other === self || other.parked || other.laneId !== laneId) continue;
+      let ds = Math.abs(other.s - s);
+      if (!lane.finite) ds = Math.min(ds, lane.length - ds);
+      if (ds < need + other.length * 0.5) return false;
+    }
+    return true;
+  }
+
+  private transferIfDue(car: SimCar, next: number): boolean {
+    const route = car.route;
+    if (!route) return false;
+    const i = car.routeIndex;
+    if (i >= route.length - 1) return false;
+    if (route[i] !== car.laneId) return false;
+    const to = route[i + 1];
+    const link = this.links.find((l) => l.from === route[i] && l.to === to);
+    if (!link) return false;
+    if (car.s < link.fromS - 1.2 && next < link.fromS) return false;
+    if (!this.entryClear(link.to, link.toS, car)) {
+      car.s = link.fromS;
+      car.v = 0;
+      return true;
+    }
+    car.laneId = link.to;
+    car.routeIndex = i + 1;
+    car.s = link.toS;
+    return true;
   }
 
   private queueLength(): number {
@@ -391,7 +603,7 @@ export class TrafficSim {
       byLane.set(c.laneId, list);
     }
     for (const [id, list] of byLane) {
-      const lane = LANE_BY_ID[id]!;
+      const lane = laneById(id)!;
       list.sort((a, b) => a.s - b.s);
       let run = 0;
       for (const c of list) {
@@ -419,7 +631,7 @@ export class TrafficSim {
     };
 
     let id = 0;
-    const subjectLane = LANE_BY_ID["mich-nb-1"]!;
+    const subjectLane = laneById("mich-nb-1")!;
     const subject: SimCar = {
       id: 0,
       laneId: subjectLane.id,
@@ -437,6 +649,9 @@ export class TrafficSim {
       subject: true,
       stallUntil: -1,
       nextStall: 16 + this.rng() * 5,
+      route: null,
+      routeIndex: 0,
+      routed: false,
     };
     poseCar(subject);
     this.subjectId = 0;
@@ -446,7 +661,7 @@ export class TrafficSim {
     const occupied = (laneId: string, s: number, length: number) =>
       this.cars.some((c) => {
         if (c.laneId !== laneId) return false;
-        const lane = LANE_BY_ID[laneId]!;
+        const lane = laneById(laneId)!;
         let ds = Math.abs(wrapS(c.s - s, lane.length));
         ds = Math.min(ds, lane.length - ds);
         return ds < length + c.length * 0.5 + S0 + 0.5;
@@ -482,6 +697,9 @@ export class TrafficSim {
           subject: false,
           stallUntil: -1,
           nextStall: 1e9,
+          route: null,
+          routeIndex: 0,
+          routed: false,
         };
         poseCar(car);
         this.cars.push(car);
@@ -520,6 +738,9 @@ export class TrafficSim {
         subject: false,
         stallUntil: -1,
         nextStall: 1e9,
+        route: null,
+        routeIndex: 0,
+        routed: false,
       };
       this.cars.push(car);
       id += 1;

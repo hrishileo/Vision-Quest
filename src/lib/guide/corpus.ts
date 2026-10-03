@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { laneIdAt } from "./city.ts";
 import { DEBRIS_TYPE_LABEL, type DebrisDef, type DebrisKind } from "./debris.ts";
 import { VIEW_NDC } from "./visibility.ts";
 
@@ -212,7 +213,7 @@ export function debrisRecord(
     class: "unknown",
     type: def.type,
     kind: def.kind,
-    laneId: null,
+    laneId: laneIdAt(def.x, def.z),
     position: { x: def.x, y: 0, z: def.z },
     speed: null,
     bbox,
@@ -278,7 +279,7 @@ export function validateFrame(frame: CorpusFrame): string[] {
       if (!obj.trackId.startsWith("deb-")) errors.push("debris track");
       if (!DEBRIS_TYPES.has(obj.type)) errors.push(`type ${obj.type}`);
       if (obj.kind !== "debris" && obj.kind !== "blockade") errors.push("kind");
-      if (obj.laneId !== null) errors.push("debris lane");
+      if (obj.laneId !== null && obj.laneId.length === 0) errors.push("debris lane");
       if (obj.speed !== null) errors.push("debris speed");
     } else {
       errors.push("class");
@@ -410,7 +411,7 @@ These labels are **ground truth** from the Vision Quest Mag Mile pursuit sim (CA
 | \`class\` | training class: \`vehicle\` or \`unknown\` |
 | \`type\` | real sim type. \`vehicle\` for cars. Debris/blockades keep \`tire\` \`crate\` \`barrier\` \`cone\` \`branch\` \`rubble\` \`pallet\` \`bag\` |
 | \`kind\` | \`null\` for vehicles. \`debris\` or \`blockade\` otherwise |
-| \`laneId\` | travel-lane id, or \`null\` when the object is parked, on the curb, or off-lane. Debris is always \`null\` |
+| \`laneId\` | travel-lane id, or \`null\` when the object is parked, on the curb, or off-lane. Debris uses the lane its ground position sits in, and \`null\` when that point is off the travel lanes |
 | \`position\` | rig origin on the ground plane, meters (\`y = 0\`). The same point the traffic sim and the debris table store |
 | \`speed\` | vehicle lane speed in m/s (\`SimCar.v\`). \`null\` for debris and blockades |
 | \`bbox\` | pixel box, origin at the top-left of the image, \`{x, y, w, h}\` |
@@ -465,7 +466,7 @@ Rotate \`dir_camera\` by the YXZ matrix and start the ray at \`camera.position\`
 
 - \`mich\` lanes run along Z. \`nb\` travels toward −Z (north) and \`sb\` toward +Z (south). Index 0 is the lane nearest the centerline; the index increases toward the curb. The ids are \`mich-nb-0\`, \`mich-nb-1\`, \`mich-nb-2\`, \`mich-sb-0\`, \`mich-sb-1\`, \`mich-sb-2\`.
 - \`chi\` lanes run along X. \`eb\` travels toward +X (east) and \`wb\` toward −X (west). The ids are \`chi-eb-0\`, \`chi-eb-1\`, \`chi-wb-0\`, \`chi-wb-1\`.
-- \`null\` means the object is not on a travel lane: parked or on the curb, or any debris or blockade. The sim's internal parked id \`park\` is not written into the file.
+- \`null\` means the object is not on a travel lane: parked, on the curb or sidewalk, or otherwise farther than half a lane width from every centerline. The sim's internal parked id \`park\` is not written into the file. Debris and blockades use the same ids as cars when their ground position is inside a lane.
 `;
 }
 
@@ -641,7 +642,11 @@ export function flipRgbaBottomUp(src: Uint8Array, width: number, height: number)
   return dst;
 }
 
-export function rgbaToPng(rgbaTopLeft: Uint8Array, width: number, height: number): Promise<Uint8Array> {
+export function rgbaToPng(
+  rgbaTopLeft: Uint8Array,
+  width: number,
+  height: number,
+): Promise<Uint8Array> {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;

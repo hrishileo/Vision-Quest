@@ -8,12 +8,22 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { buildDrone, type DroneBuild } from "./build-drone";
 import { buildBlueprint, setBlueprintVisible, type Blueprint } from "./blueprint";
-import { applySignalLights, buildWorld, makeStudioCar, poseWorldCars, type WorldBuild } from "./build-world";
+import {
+  addDetourRoads,
+  addLaneBlockades,
+  applySignalLights,
+  buildWorld,
+  makeStudioCar,
+  poseWorldCars,
+  syncWorldCars,
+  type DebrisRig,
+  type WorldBuild,
+} from "./build-world";
 import { PART_MAP } from "./catalog";
 import { kitLabel } from "@/lib/bom";
 import { TOUR_BEATS, useGuide } from "./store";
 import { isAir, type BBox, type LockState, type Mode, type Telemetry } from "./types";
-import type { TrafficSnapshot } from "./traffic";
+import { SIM_STEP, type TrafficSnapshot } from "./traffic";
 import { Y } from "./specs";
 import { BUILDINGS, CAR_L, CAR_W } from "./city";
 import {
@@ -25,6 +35,14 @@ import {
   type ScanSnapshot,
 } from "./debris";
 import { isVisibleInCamera } from "./visibility";
+import {
+  DETOUR_LINKS,
+  PRESETS,
+  armFleet,
+  blockedLaneDebris,
+  blocksFor,
+  type BlockedLaneView,
+} from "./detour";
 import {
   CORPUS_HEIGHT,
   CORPUS_WIDTH,
@@ -122,7 +140,13 @@ export class GuideEngine {
   private scanAge = 0;
   private learned = new Set<string>();
   private scanRing: THREE.Mesh;
-  private debrisLabels: { id: number; el: HTMLDivElement; obj: CSS2DObject; kind: HTMLSpanElement; meta: HTMLSpanElement }[] = [];
+  private debrisLabels: {
+    id: number;
+    el: HTMLDivElement;
+    obj: CSS2DObject;
+    kind: HTMLSpanElement;
+    meta: HTMLSpanElement;
+  }[] = [];
   private lock: LockState = "search";
   private lockAge = 0;
   private missAge = 0;
@@ -169,6 +193,10 @@ export class GuideEngine {
   private corpusRay = new THREE.Raycaster();
   private studioCarPhase = 0;
   private wasTouring = false;
+  private detourRoads: THREE.Group | null = null;
+  private detourBlockades: DebrisRig[] = [];
+  private detourActive = false;
+  private holdDetourCam = false;
   private lastMode: string = "anatomy";
   private lastBuild: string = "skeleton";
   private blueprint: Blueprint;
@@ -419,10 +447,7 @@ export class GuideEngine {
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
         -((e.clientY - rect.top) / rect.height) * 2 + 1,
       );
-      if (
-        this.pointerHeld &&
-        Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 5
-      ) {
+      if (this.pointerHeld && Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 5) {
         this.dragging = true;
       }
       this.idle = 0;
@@ -509,6 +534,18 @@ export class GuideEngine {
         t: this.world.sim.time,
         runId: this.corpus.runId,
       }),
+    };
+    window.__routes = {
+      assign: (carId, laneIds) => this.world.sim.setRoute(carId, laneIds),
+      clear: (carId) => this.world.sim.setRoute(carId, null),
+      setLinks: (links) => {
+        this.world.sim.links = links.map((link) => ({ ...link }));
+      },
+      routes: () =>
+        this.world.sim.cars
+          .filter((car) => car.route && car.route.length > 0)
+          .map((car) => ({ carId: car.id, laneIds: [...car.route!], index: car.routeIndex })),
+      loadBlockedLane: (opts) => this.loadBlockedLane(opts),
     };
   }
 
@@ -738,12 +775,11 @@ export class GuideEngine {
       mat.clippingPlanes = cut ? [this.clipPlane] : [];
     }
 
-    const rpm =
-      isAir(s.mode)
-        ? 1800 + useGuide.getState().telemetry.throttle * 7200
-        : s.mode === "controller"
-          ? 2400 + this.pidP * 1800
-          : s.rpm;
+    const rpm = isAir(s.mode)
+      ? 1800 + useGuide.getState().telemetry.throttle * 7200
+      : s.mode === "controller"
+        ? 2400 + this.pidP * 1800
+        : s.rpm;
     const spin = (rpm / 60) * Math.PI * 2 * simDt;
     for (const p of this.drone.propPivots) {
       const dir = p.userData.cw ? 1 : -1;
@@ -829,7 +865,10 @@ export class GuideEngine {
     this.frustum.visible = to === "controller" || to === "vision" || isAir(to);
     this.hoverObj = null;
     if (isAir(to)) {
+      const wasDetour = this.detourActive;
+      this.clearDetourVisual();
       this.world.sim.reset((Date.now() ^ 0x85ebca6b) >>> 0);
+      if (wasDetour) syncWorldCars(this.world);
       poseWorldCars(this.world, 0);
       applySignalLights(this.world.signals, this.world.sim.nsLit, this.world.sim.ewLit);
       this.targetIndex = this.world.sim.subjectId;
@@ -856,7 +895,10 @@ export class GuideEngine {
       this.controls.maxDistance = 90;
       this.controls.minDistance = 1.2;
       const back = _v.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-      this.camera.position.copy(this.dronePos).addScaledVector(back, -8.4).add(_v3.set(0, 3.4, 0));
+      this.camera.position
+        .copy(this.dronePos)
+        .addScaledVector(back, -8.4)
+        .add(_v3.set(0, 3.4, 0));
       this.controls.target.copy(this.dronePos);
       this.controls.target.y += 0.4;
     } else {
@@ -904,7 +946,10 @@ export class GuideEngine {
         if (mesh.userData.helper || mesh.userData.blueprintEdge) return;
         const orig = mesh.material;
         if (!orig || Array.isArray(orig)) return;
-        if (!(orig instanceof THREE.MeshStandardMaterial) && !(orig instanceof THREE.MeshPhysicalMaterial)) {
+        if (
+          !(orig instanceof THREE.MeshStandardMaterial) &&
+          !(orig instanceof THREE.MeshPhysicalMaterial)
+        ) {
           return;
         }
         mesh.userData._bpOrig = orig;
@@ -1016,7 +1061,10 @@ export class GuideEngine {
     );
 
     this.drone.droneCam.updateMatrixWorld();
-    _ndc.copy(tgt).setY(tgt.y + 0.12).project(this.drone.droneCam);
+    _ndc
+      .copy(tgt)
+      .setY(tgt.y + 0.12)
+      .project(this.drone.droneCam);
     const inView = Math.abs(_ndc.x) < 0.92 && Math.abs(_ndc.y) < 0.92 && _ndc.z > 0 && _ndc.z < 1;
     if (inView) {
       this.lock = "track";
@@ -1057,7 +1105,10 @@ export class GuideEngine {
     const desired = _v2.set(target.x - hx * standoff, altitude, target.z - hz * standoff);
 
     const err = _v.copy(desired).sub(this.dronePos);
-    const dErr = _v3.copy(err).sub(this.prevErr).multiplyScalar(1 / Math.max(dt, 1 / 120));
+    const dErr = _v3
+      .copy(err)
+      .sub(this.prevErr)
+      .multiplyScalar(1 / Math.max(dt, 1 / 120));
     this.prevErr.copy(err);
     this.integral.addScaledVector(err, dt);
     this.integral.clampLength(0, 4);
@@ -1229,8 +1280,7 @@ export class GuideEngine {
   }
 
   private updateLabels(s: ReturnType<typeof useGuide.getState>) {
-    const hide =
-      s.buildView === "kit" || isAir(s.mode) || s.camView === "fpv";
+    const hide = s.buildView === "kit" || isAir(s.mode) || s.camView === "fpv";
     for (const lab of this.labelList) {
       const focus = s.hovered === lab.id || s.selected === lab.id;
       lab.obj.visible = !hide && focus;
@@ -1239,10 +1289,17 @@ export class GuideEngine {
   }
 
   private updateCamera(dt: number, mode: string, camView: string, selected: string | null) {
+    if (this.holdDetourCam) {
+      this.frameDetour();
+      return;
+    }
     if (camView === "fpv" && isAir(mode)) return;
     if (camView === "chase" && isAir(mode)) {
       const back = _v.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-      const desired = _v2.copy(this.dronePos).addScaledVector(back, -7.2).add(_v3.set(0, 3.1, 0));
+      const desired = _v2
+        .copy(this.dronePos)
+        .addScaledVector(back, -7.2)
+        .add(_v3.set(0, 3.1, 0));
       this.camera.position.lerp(desired, 1 - Math.exp(-2.4 * dt));
       const car = this.world.cars[this.targetIndex]!;
       _look.copy(this.dronePos).add(car.group.position).multiplyScalar(0.5);
@@ -1366,9 +1423,7 @@ export class GuideEngine {
   private pushTelemetry(mode: string) {
     const simCar =
       this.world.sim.cars[this.targetIndex] ?? this.world.sim.cars[this.world.sim.subjectId];
-    const range = simCar
-      ? this.dronePos.distanceTo(new THREE.Vector3(simCar.x, 0, simCar.z))
-      : 0;
+    const range = simCar ? this.dronePos.distanceTo(new THREE.Vector3(simCar.x, 0, simCar.z)) : 0;
     const speed = this.droneVel.length();
     const yawErr = simCar
       ? THREE.MathUtils.radToDeg(
@@ -1735,7 +1790,11 @@ export class GuideEngine {
       const pixels = this.corpusPixels;
       if (!pixels) return;
       renderer.readRenderTargetPixels(target, 0, 0, CORPUS_WIDTH, CORPUS_HEIGHT, pixels);
-      const png = rgbaToPng(flipRgbaBottomUp(pixels, CORPUS_WIDTH, CORPUS_HEIGHT), CORPUS_WIDTH, CORPUS_HEIGHT);
+      const png = rgbaToPng(
+        flipRgbaBottomUp(pixels, CORPUS_WIDTH, CORPUS_HEIGHT),
+        CORPUS_WIDTH,
+        CORPUS_HEIGHT,
+      );
       this.corpus.push(frame, png);
       useGuide.getState().setCorpusStats(this.corpus.frames.length, this.corpus.achievedHz());
     } finally {
@@ -1753,9 +1812,12 @@ export class GuideEngine {
 
   private async downloadCorpus() {
     const bytes = await this.corpus.zip();
-    const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], {
-      type: "application/zip",
-    });
+    const blob = new Blob(
+      [bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer],
+      {
+        type: "application/zip",
+      },
+    );
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -1764,6 +1826,61 @@ export class GuideEngine {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+  }
+
+  private clearDetourVisual() {
+    this.holdDetourCam = false;
+    if (this.detourRoads) {
+      this.world.group.remove(this.detourRoads);
+      this.detourRoads = null;
+    }
+    for (const rig of this.detourBlockades) {
+      this.world.group.remove(rig.group);
+      const index = this.world.debris.indexOf(rig);
+      if (index >= 0) this.world.debris.splice(index, 1);
+    }
+    this.detourBlockades = [];
+    this.detourActive = false;
+    this.drone.group.visible = true;
+  }
+
+  private frameDetour() {
+    this.camera.fov = 42;
+    this.camera.updateProjectionMatrix();
+    this.camera.position.set(46, 32, 14);
+    this.controls.target.set(34, 0.4, -16);
+    this.controls.maxDistance = 160;
+    this.controls.enableDamping = false;
+    this.controls.update();
+    this.controls.enableDamping = true;
+    this.camera.lookAt(this.controls.target);
+  }
+
+  private loadBlockedLane(opts?: BlockedLaneView) {
+    const preset = PRESETS[opts?.preset ?? "both"];
+    const fraction = opts?.fraction ?? 0.5;
+    const arm = opts?.detour === false ? "stay" : "detour";
+    const seed = opts?.seed ?? 7;
+    const atS = opts?.atS ?? 24;
+    useGuide.setState({ paused: true, camView: "orbit" });
+    this.clearDetourVisual();
+    const fleet = armFleet(seed, fraction, preset.lanes, arm);
+    this.world.sim.loadFleet(fleet.cars, {
+      seed,
+      blocks: blocksFor(preset.lanes),
+      links: DETOUR_LINKS.map((link) => ({ ...link })),
+    });
+    this.detourRoads = addDetourRoads(this.world);
+    this.detourBlockades = addLaneBlockades(this.world, blockedLaneDebris(preset.lanes));
+    this.detourActive = true;
+    syncWorldCars(this.world);
+    this.world.sim.advance(Math.max(0, Math.round(atS / SIM_STEP)));
+    poseWorldCars(this.world, 0);
+    this.holdDetourCam = true;
+    this.drone.group.visible = false;
+    this.lockBeam.visible = false;
+    this.predMesh.visible = false;
+    this.frameDetour();
   }
 
   dispose() {
@@ -1805,6 +1922,7 @@ export class GuideEngine {
     this.corpusTarget?.dispose();
     this.renderer.dispose();
     if (window.__corpus) delete window.__corpus;
+    if (window.__routes) delete window.__routes;
     this.tip.remove();
     this.labels.domElement.remove();
     this.renderer.domElement.remove();

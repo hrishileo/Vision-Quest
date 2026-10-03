@@ -30,9 +30,21 @@ import {
   zipStore,
   type CorpusFrame,
 } from "./corpus.ts";
-import { buildingOccludes, isVisibleInCamera, ndcInView, MIN_RANGE, OCCLUDE_PAD, VIEW_NDC } from "./visibility.ts";
+import { laneIdAt } from "./city.ts";
+import {
+  buildingOccludes,
+  isVisibleInCamera,
+  ndcInView,
+  MIN_RANGE,
+  OCCLUDE_PAD,
+  VIEW_NDC,
+} from "./visibility.ts";
 
-function cameraLookingAt(eye: THREE.Vector3, target: THREE.Vector3, fov = 70): THREE.PerspectiveCamera {
+function cameraLookingAt(
+  eye: THREE.Vector3,
+  target: THREE.Vector3,
+  fov = 70,
+): THREE.PerspectiveCamera {
   const camera = new THREE.PerspectiveCamera(fov, CORPUS_WIDTH / CORPUS_HEIGHT, 0.04, 180);
   camera.position.copy(eye);
   camera.up.set(0, 1, 0);
@@ -91,7 +103,7 @@ describe("CAM0 intrinsics and box projection", () => {
     const box = projectBox(camera, cube(new THREE.Vector3(0, 0, -10), 1), 200, 200);
     assert.ok(box);
     assert.ok(Math.abs(box.x + box.w / 2 - 100) < 0.5);
-    assert.ok(Math.abs(box.w - (200 * (1 / 9)) ) < 0.5);
+    assert.ok(Math.abs(box.w - 200 * (1 / 9)) < 0.5);
     assert.equal(projectBox(camera, cube(new THREE.Vector3(0, 0, 5), 0.5), 200, 200), null);
     assert.equal(projectToPixel(camera, { x: 0, y: 0, z: 4 }, 200, 200), null);
   });
@@ -202,7 +214,7 @@ describe("label policy and export schema", () => {
     assert.equal(tire.type, "tire");
     assert.equal(tire.kind, "debris");
     assert.equal(tire.trackId, "deb-0");
-    assert.equal(tire.laneId, null);
+    assert.equal(tire.laneId, "mich-nb-2");
     assert.equal(tire.speed, null);
     assert.equal(barrier.class, "unknown");
     assert.equal(barrier.type, "barrier");
@@ -229,6 +241,43 @@ describe("label policy and export schema", () => {
     assert.equal(yolo[0]!.startsWith("0 "), true);
     assert.equal(yolo[1]!.startsWith("1 "), true);
     assert.equal(yolo[2]!.startsWith("1 "), true);
+  });
+
+  it("sets debris laneId from the travel lane under the ground position", () => {
+    assert.equal(laneIdAt(2, -10), "mich-nb-0");
+    assert.equal(laneIdAt(5.5, 30), "mich-nb-1");
+    assert.equal(laneIdAt(9, -24), "mich-nb-2");
+    assert.equal(laneIdAt(-5.5, 8), "mich-sb-1");
+    assert.equal(laneIdAt(20, 2.4), "chi-eb-0");
+    assert.equal(laneIdAt(14.4, -20), null);
+    assert.equal(laneIdAt(-14.5, 26), null);
+    assert.equal(laneIdAt(12.8, -34), null);
+
+    const onLane = debrisRecord(
+      { id: 40, type: "barrier", kind: "blockade", x: 5.5, z: -24 },
+      corners,
+      camera,
+      CORPUS_WIDTH,
+      CORPUS_HEIGHT,
+    );
+    const offLane = debrisRecord(
+      { id: 41, type: "crate", kind: "debris", x: 14.4, z: -20 },
+      corners,
+      camera,
+      CORPUS_WIDTH,
+      CORPUS_HEIGHT,
+    );
+    assert.ok(onLane && offLane);
+    assert.equal(onLane.laneId, "mich-nb-1");
+    assert.equal(onLane.speed, null);
+    assert.equal(onLane.class, "unknown");
+    assert.equal(offLane.laneId, null);
+
+    const pose = cameraRecord(camera, CORPUS_WIDTH, CORPUS_HEIGHT);
+    const frame = makeFrame({ index: 4, t: 0.4, hz: 10, camera: pose, objects: [onLane, offLane] });
+    assert.deepEqual(validateFrame(frame), []);
+    const blank = { ...onLane, laneId: "" };
+    assert.ok(validateFrame({ ...frame, objects: [blank] }).includes("debris lane"));
   });
 
   it("round-trips jsonl and a stored zip with the YOLO layout", () => {

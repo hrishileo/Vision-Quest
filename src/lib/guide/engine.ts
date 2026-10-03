@@ -689,20 +689,39 @@ export class GuideEngine {
     }
     this.wasTouring = s.touring;
 
-    const studio = !isAir(s.mode);
+    const detourView = this.holdDetourCam;
+    const studio = !isAir(s.mode) && !detourView;
     this.applyBlueprint(studio && s.mode === "anatomy" && s.buildView === "skeleton");
 
     this.studio.visible = studio;
     this.world.group.visible = !studio;
     this.studioCar.visible = s.mode === "vision";
-    this.scene.fog = studio ? this.studioFog : this.pursuitFog;
-    this.scene.background = new THREE.Color(studio ? 0x0a0b0d : 0x14181e);
-    this.scene.environmentIntensity = studio ? 0.58 : 0.28;
-    this.hemi.intensity = studio ? 1.05 : 0.5;
-    this.key.intensity = studio ? 2.8 : 1.45;
-    this.key.position.set(studio ? 3.2 : 28, studio ? 4.4 : 42, studio ? 2.2 : 18);
-    this.rim.intensity = 0.85;
-    if (this.bloomPass) this.bloomPass.strength = 0.38;
+    if (detourView) {
+      this.scene.fog = null;
+      this.scene.background = new THREE.Color(0xc5d4e4);
+      this.scene.environmentIntensity = 1;
+      this.hemi.color.setHex(0xfff6ea);
+      this.hemi.groundColor.setHex(0xa39886);
+      this.hemi.intensity = 1.6;
+      this.key.intensity = 3.6;
+      this.key.position.set(22, 70, 28);
+      this.key.castShadow = false;
+      this.rim.intensity = 0.25;
+      this.renderer.toneMappingExposure = 1.2;
+    } else {
+      this.hemi.color.setHex(0xd5dbe0);
+      this.hemi.groundColor.setHex(0x1a1c20);
+      this.scene.fog = studio ? this.studioFog : this.pursuitFog;
+      this.scene.background = new THREE.Color(studio ? 0x0a0b0d : 0x14181e);
+      this.scene.environmentIntensity = studio ? 0.58 : 0.28;
+      this.hemi.intensity = studio ? 1.05 : 0.5;
+      this.key.intensity = studio ? 2.8 : 1.45;
+      this.key.position.set(studio ? 3.2 : 28, studio ? 4.4 : 42, studio ? 2.2 : 18);
+      this.key.castShadow = true;
+      this.rim.intensity = 0.85;
+      this.renderer.toneMappingExposure = this.useBloom ? 0.92 : 1.15;
+    }
+    if (this.bloomPass) this.bloomPass.strength = detourView ? 0.05 : 0.38;
     this.controls.autoRotate =
       !this.reduced &&
       studio &&
@@ -1845,10 +1864,10 @@ export class GuideEngine {
   }
 
   private frameDetour() {
-    this.camera.fov = 42;
+    this.camera.fov = 46;
     this.camera.updateProjectionMatrix();
-    this.camera.position.set(46, 32, 14);
-    this.controls.target.set(34, 0.4, -16);
+    this.camera.position.set(72, 58, 36);
+    this.controls.target.set(34, 0.4, -12);
     this.controls.maxDistance = 160;
     this.controls.enableDamping = false;
     this.controls.update();

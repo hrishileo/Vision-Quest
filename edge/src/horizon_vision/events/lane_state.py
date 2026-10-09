@@ -8,9 +8,13 @@ Priority, first match:
 
 1. Nothing observed inside ``stale_s``, or every current observation is below
    ``min_confidence`` → ``unknown``. Never ``clear``.
-2. A vehicle or ``unknown`` track has stayed in this lane, at or under
-   ``stationary_mps``, and inside ``stationary_radius_m`` of where that
-   dwell started, for at least ``hold_s`` → ``blocked``.
+2. A track whose class is in ``block_classes`` (default ``vehicle`` and
+   ``unknown``) has stayed in this lane, at or under ``stationary_mps``,
+   and inside ``stationary_radius_m`` of where that dwell started, for at
+   least ``hold_s`` → ``blocked``. A class outside ``block_classes`` still
+   counts toward the mean speed, so a stall can be ``slow`` without closing
+   the lane. Setting ``vehicle_stall_hold_s`` (default off) also lets a
+   stopped vehicle close the lane, but only after that longer dwell.
 3. Mean speed is below ``slow_mps`` → ``slow``.
 4. Otherwise → ``clear``.
 
@@ -195,6 +199,17 @@ class LaneMonitor:
     min_confidence: float = 0.2
     stationary_radius_m: float = 4.0
     max_gap_s: float = 0.5
+    # Default keeps the published contract: a stopped vehicle or a piece of
+    # debris can close a lane. The closed loop passes ``("unknown",)`` so a
+    # stall or a red-light queue stays ``slow`` and only debris closes a lane.
+    block_classes: tuple[str, ...] = ("vehicle", "unknown")
+    # When set, unknown tracks may dwell below ``min_confidence``. Vehicle
+    # tracks keep ``min_confidence``. None preserves the single floor.
+    unknown_min_confidence: float | None = None
+    # Off by default. When set, a stopped vehicle can publish ``blocked``
+    # after this dwell even if ``vehicle`` is not in ``block_classes``.
+    # It must be at least ``hold_s``, so a stall waits longer than debris.
+    vehicle_stall_hold_s: float | None = None
     _episodes: dict[str, _Episode] = field(default_factory=dict)
     _lanes: dict[str, _LaneMemory] = field(default_factory=dict)
     _last_t: float | None = None
@@ -214,6 +229,13 @@ class LaneMonitor:
             raise ValueError("stationary_radius_m must be >= 0")
         if self.max_gap_s < 0:
             raise ValueError("max_gap_s must be >= 0")
+        allowed = {"vehicle", "unknown"}
+        if not self.block_classes or any(cls not in allowed for cls in self.block_classes):
+            raise ValueError("block_classes must be a non-empty subset of vehicle and unknown")
+        if self.unknown_min_confidence is not None and not 0 <= self.unknown_min_confidence <= 1:
+            raise ValueError("unknown_min_confidence must be in [0, 1]")
+        if self.vehicle_stall_hold_s is not None and self.vehicle_stall_hold_s < self.hold_s:
+            raise ValueError("vehicle_stall_hold_s must be at least hold_s")
 
     def update(self, t: float, tracks: Sequence[EdgeEvent]) -> list[LaneStateEvent]:
         if not math.isfinite(t):
@@ -260,11 +282,27 @@ class LaneMonitor:
         self._last_t = t
         return emitted
 
+    def _floor(self, event: EdgeEvent) -> float:
+        if event.cls == "unknown" and self.unknown_min_confidence is not None:
+            return self.unknown_min_confidence
+        return self.min_confidence
+
+    def _block_hold(self, event: EdgeEvent) -> float | None:
+        """Seconds a stationary track must dwell before it can close the lane."""
+        if event.cls == "vehicle" and self.vehicle_stall_hold_s is not None:
+            return self.vehicle_stall_hold_s
+        if event.cls in self.block_classes:
+            return self.hold_s
+        return None
+
+    def _can_block(self, event: EdgeEvent) -> bool:
+        return self._block_hold(event) is not None
+
     def _note_dwell(self, event: EdgeEvent, t: float) -> None:
         qualifying = (
             event.lane is not None
-            and event.cls in ("vehicle", "unknown")
-            and event.confidence >= self.min_confidence
+            and self._can_block(event)
+            and event.confidence >= self._floor(event)
             and event.speed <= self.stationary_mps
         )
         episode = self._episodes.get(event.track_id)
@@ -297,14 +335,15 @@ class LaneMonitor:
 
     def _blocking(self, event: EdgeEvent, t: float) -> bool:
         episode = self._episodes.get(event.track_id)
-        if episode is None or episode.lane != event.lane:
+        hold = self._block_hold(event)
+        if episode is None or episode.lane != event.lane or hold is None:
             return False
-        if event.confidence < self.min_confidence or event.speed > self.stationary_mps:
+        if event.confidence < self._floor(event) or event.speed > self.stationary_mps:
             return False
-        return (t - episode.since) >= self.hold_s
+        return (t - episode.since) >= hold
 
     def _assess(self, events: list[EdgeEvent], t: float) -> _LaneMemory:
-        qualifying = [event for event in events if event.confidence >= self.min_confidence]
+        qualifying = [event for event in events if event.confidence >= self._floor(event)]
         if not qualifying:
             return _LaneMemory(
                 last_obs_t=t,

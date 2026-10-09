@@ -14,6 +14,7 @@ import {
   MICH_SB,
   RUSH_X,
   SPAN,
+  WABASH_X,
   overlapsRoad,
   type BuildingFoot,
 } from "./city";
@@ -536,6 +537,75 @@ export function addDetourRoads(world: WorldBuild): THREE.Group {
   world.geometries.push(along.geometry, cross.geometry);
   world.group.add(group);
   return group;
+}
+
+/** Rush, Wabash, and both returns. Used by the closed-loop view. */
+export function addLoopRoads(world: WorldBuild): THREE.Group {
+  const group = addDetourRoads(world);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x3a3c40, roughness: 0.92, metalness: 0.05 });
+  world.materials.push(mat);
+  const alongLen = CHI_WB[0] - CROSS_Z + 8;
+  const along = new THREE.Mesh(new THREE.PlaneGeometry(9.2, alongLen), mat);
+  along.rotation.x = -Math.PI / 2;
+  along.position.set((WABASH_X[0] + WABASH_X[1]) / 2, 0.03, (CHI_WB[0] + CROSS_Z) / 2);
+  along.receiveShadow = true;
+  const crossLen = MICH_NB[0] - WABASH_X[0] + 4;
+  const cross = new THREE.Mesh(new THREE.PlaneGeometry(crossLen, 6.2), mat);
+  cross.rotation.x = -Math.PI / 2;
+  cross.position.set((WABASH_X[0] + MICH_NB[0]) / 2, 0.032, CROSS_Z);
+  cross.receiveShadow = true;
+  group.add(along, cross);
+  world.geometries.push(along.geometry, cross.geometry);
+  const callouts: { text: string; ink: string; plate: string; x: number; z: number }[] = [
+    { text: "WABASH", ink: "#2a2118", plate: "#e09a3e", x: WABASH_X[0], z: -6 },
+    { text: "RUSH", ink: "#f4f7ff", plate: "#3c7dff", x: RUSH_X[0], z: -4 },
+    { text: "NB BARRIERS", ink: "#fff6f2", plate: "#d4552a", x: MICH_NB[1], z: -14 },
+  ];
+  for (const tag of callouts) {
+    const sprite = streetLabel(tag.text, tag.ink, tag.plate);
+    sprite.position.set(tag.x, 7, tag.z);
+    group.add(sprite);
+  }
+  return group;
+}
+
+function streetLabel(text: string, ink: string, plate: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 160;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("street label canvas is unavailable");
+  ctx.fillStyle = plate;
+  roundRect(ctx, 4, 4, 504, 152, 28);
+  ctx.fill();
+  ctx.fillStyle = ink;
+  ctx.font = "700 78px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 256, 84);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  sprite.scale.set(28, 8.8, 1);
+  sprite.renderOrder = 20;
+  return sprite;
+}
+
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
 }
 
 export function addLaneBlockades(world: WorldBuild, defs: DebrisDef[]): DebrisRig[] {

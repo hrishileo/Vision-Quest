@@ -101,6 +101,58 @@ def test_persistent_stationary_vehicle_blocks_the_lane():
     assert blocked.t == pytest.approx(1.0)
 
 
+def test_vehicle_stall_hold_stays_off_and_a_long_stall_stays_slow():
+    monitor = LaneMonitor(block_classes=("unknown",))
+    assert monitor.vehicle_stall_hold_s is None
+    stall = lambda t: _track(speed=0.0, t=t, confidence=0.9)
+    last = None
+    for step in range(0, 25):
+        last = _at(monitor, step * 0.5, [stall(step * 0.5)])["mich-nb-1"]
+    assert last is not None
+    assert last.state == "slow"
+
+
+def test_vehicle_stall_hold_blocks_after_the_longer_dwell_and_debris_uses_hold_s():
+    monitor = LaneMonitor(
+        block_classes=("unknown",),
+        hold_s=1.5,
+        vehicle_stall_hold_s=10.0,
+        max_gap_s=0.5,
+        min_confidence=0.2,
+    )
+    stall = lambda t: _track(speed=0.0, t=t, x=5.5, y=1.0, confidence=0.9)
+    debris = lambda t: _track(
+        track_id="deb-1",
+        cls="unknown",
+        lane="mich-nb-0",
+        speed=0.0,
+        t=t,
+        x=2.0,
+        y=1.0,
+        confidence=0.9,
+    )
+    early = None
+    late = None
+    debris_at_hold = None
+    for step in range(0, 21):
+        t = step * 0.5
+        got = _at(monitor, t, [stall(t), debris(t)])
+        if t == 1.5:
+            debris_at_hold = got["mich-nb-0"].state
+        if t == 9.5:
+            early = got["mich-nb-1"].state
+        if t == 10.0:
+            late = got["mich-nb-1"].state
+    assert debris_at_hold == "blocked"
+    assert early == "slow"
+    assert late == "blocked"
+
+
+def test_vehicle_stall_hold_cannot_be_shorter_than_hold_s():
+    with pytest.raises(ValueError, match="vehicle_stall_hold_s"):
+        LaneMonitor(vehicle_stall_hold_s=0.5, hold_s=1.5)
+
+
 def test_persistent_unknown_debris_blocks_the_lane():
     monitor = _monitor()
     debris = lambda t: _track(

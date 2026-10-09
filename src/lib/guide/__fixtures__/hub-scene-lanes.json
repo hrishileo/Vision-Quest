@@ -1,0 +1,31 @@
+{
+  "lanes": {
+    "mich-nb-0": "mich-nb-0",
+    "mich-nb-1": "mich-nb-1",
+    "mich-nb-2": "mich-nb-2",
+    "mich-sb-0": "mich-sb-0",
+    "mich-sb-1": "mich-sb-1",
+    "mich-sb-2": "mich-sb-2",
+    "chi-eb-0": "chi-eb-0",
+    "chi-wb-0": "chi-wb-0",
+    "rush-nb": "rush-nb-0",
+    "wabash-nb": "wabash-nb-0"
+  },
+  "samples": [
+    {
+      "route": ["rush-nb@ohio--ontario", "chi-eb-0@rush--nb2"],
+      "corridor": "rush-nb",
+      "scene": "rush-nb-0"
+    },
+    {
+      "route": ["wabash-nb@huron--chicago", "chi-wb-0@wabash--rush"],
+      "corridor": "wabash-nb",
+      "scene": "wabash-nb-0"
+    },
+    {
+      "route": ["ohio-ew@nb1--nb0", "mich-nb-0@ohio--ontario"],
+      "corridor": "mich-nb-0",
+      "scene": "mich-nb-0"
+    }
+  ]
+}

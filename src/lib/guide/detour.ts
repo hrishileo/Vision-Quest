@@ -786,8 +786,8 @@ export function runDetourStudy(opts?: {
       },
       {
         hubLane: "wabash-nb",
-        sceneLane: null,
-        note: "Wabash Avenue was not added. The detour is Rush only.",
+        sceneLane: "wabash-nb-0",
+        note: "West of the lots. Hub id has no index. The scene lane is wabash-nb-0 (wabash-nb-1 is the outer lane). This Rush measurement does not send cars there. The closed loop does.",
       },
       {
         hubLane: "chicago-ew",
@@ -814,7 +814,7 @@ export function renderDetourSummary(study: DetourStudy): string {
   lines.push("# Mag Mile detour measurement");
   lines.push("");
   lines.push(
-    "The excerpt had Michigan Avenue and Chicago Avenue only. Rush Street is the one added parallel street, east of Michigan: `rush-nb-0` and `rush-nb-1`. Cars leave Michigan on the existing Chicago lane `chi-eb-0` and return on `conn-wb-0`. Wabash Avenue is not in the scene and was not added. The detour route uses `rush-nb-0`.",
+    "Rush Street is east of Michigan (`rush-nb-0`, `rush-nb-1`). This measurement sends cars out on `chi-eb-0` and back on `conn-wb-0`, using `rush-nb-0`. Wabash is the west parallel (`wabash-nb-0`, `wabash-nb-1`), joined on `chi-wb-0` and `conn-eb-0`. The closed loop uses it when anti-herding leaves Rush. This table does not.",
   );
   lines.push("");
   lines.push(study.cam0.routerNote);
@@ -943,6 +943,7 @@ export type RoutesApi = {
   setLinks: (links: readonly RouteLink[]) => void;
   routes: () => { carId: number; laneIds: string[]; index: number }[];
   loadBlockedLane: (opts?: BlockedLaneView) => void;
+  loadLoop: () => void;
 };
 
 export type BlockedLaneView = {

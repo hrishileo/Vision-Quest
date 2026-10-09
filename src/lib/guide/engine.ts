@@ -10,6 +10,7 @@ import { buildDrone, type DroneBuild } from "./build-drone";
 import { buildBlueprint, setBlueprintVisible, type Blueprint } from "./blueprint";
 import {
   addDetourRoads,
+  addLoopRoads,
   addLaneBlockades,
   applySignalLights,
   buildWorld,
@@ -43,6 +44,7 @@ import {
   blocksFor,
   type BlockedLaneView,
 } from "./detour";
+import { showcaseScene } from "./closed-loop";
 import {
   CORPUS_HEIGHT,
   CORPUS_WIDTH,
@@ -197,6 +199,7 @@ export class GuideEngine {
   private detourBlockades: DebrisRig[] = [];
   private detourActive = false;
   private holdDetourCam = false;
+  private loopView = false;
   private lastMode: string = "anatomy";
   private lastBuild: string = "skeleton";
   private blueprint: Blueprint;
@@ -546,6 +549,7 @@ export class GuideEngine {
           .filter((car) => car.route && car.route.length > 0)
           .map((car) => ({ carId: car.id, laneIds: [...car.route!], index: car.routeIndex })),
       loadBlockedLane: (opts) => this.loadBlockedLane(opts),
+      loadLoop: () => this.loadLoopView(),
     };
   }
 
@@ -1309,7 +1313,8 @@ export class GuideEngine {
 
   private updateCamera(dt: number, mode: string, camView: string, selected: string | null) {
     if (this.holdDetourCam) {
-      this.frameDetour();
+      if (this.loopView) this.frameLoop();
+      else this.frameDetour();
       return;
     }
     if (camView === "fpv" && isAir(mode)) return;
@@ -1849,6 +1854,7 @@ export class GuideEngine {
 
   private clearDetourVisual() {
     this.holdDetourCam = false;
+    this.loopView = false;
     if (this.detourRoads) {
       this.world.group.remove(this.detourRoads);
       this.detourRoads = null;
@@ -1873,6 +1879,37 @@ export class GuideEngine {
     this.controls.update();
     this.controls.enableDamping = true;
     this.camera.lookAt(this.controls.target);
+  }
+
+  private frameLoop() {
+    this.camera.fov = 58;
+    this.camera.updateProjectionMatrix();
+    this.camera.position.set(0, 110, 36);
+    this.controls.target.set(0, 0, -18);
+    this.controls.maxDistance = 240;
+    this.controls.enableDamping = false;
+    this.controls.update();
+    this.controls.enableDamping = true;
+    this.camera.lookAt(this.controls.target);
+  }
+
+  private loadLoopView() {
+    const scene = showcaseScene();
+    useGuide.setState({ paused: true, camView: "orbit" });
+    this.clearDetourVisual();
+    this.world.sim.loadFleet(scene.cars, { seed: 1, blocks: scene.blocks, links: scene.links });
+    this.detourRoads = addLoopRoads(this.world);
+    this.detourBlockades = addLaneBlockades(this.world, scene.debris);
+    this.detourActive = true;
+    this.loopView = true;
+    syncWorldCars(this.world);
+    this.world.sim.advance(Math.max(0, Math.round(scene.atS / SIM_STEP)));
+    poseWorldCars(this.world, 0);
+    this.holdDetourCam = true;
+    this.drone.group.visible = false;
+    this.lockBeam.visible = false;
+    this.predMesh.visible = false;
+    this.frameLoop();
   }
 
   private loadBlockedLane(opts?: BlockedLaneView) {

@@ -44,6 +44,17 @@ PYTHONPATH=edge/src:hub/src python -m horizon_vision.hub \
   --summary /tmp/debris_summary.txt
 ```
 
+The closed loop records CAM0 labels from a debris scenario, runs lane state and the hub, then replays the alerts in the sim. `npm run loop` writes `/tmp/closed-loop/report.md` (legacy policy and loop policy).
+
+```bash
+npm run loop
+PYTHONPATH=edge/src:hub/src python -m horizon_vision.hub.bridge \
+  --labels /tmp/closed-loop/loop/nominal-all-lanes/labels.jsonl \
+  --drivers /tmp/closed-loop/loop/nominal-all-lanes/drivers.json \
+  --policy loop \
+  --output /tmp/closed-loop/loop/nominal-all-lanes/plans.json
+```
+
 `edge/legacy/` holds unmerged HorizonVision work (time sync and ingest, the LiDAR cluster detector, BEV metrics, the occupancy grid). It is not imported by the edge or the hub. See `edge/legacy/README.md`.
 
 ## Run

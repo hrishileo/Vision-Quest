@@ -18,3 +18,10 @@ artifacts
 AGENTS.md
 AGENTS.project.md
 *.local
+
+# Python (edge/ and hub/)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/

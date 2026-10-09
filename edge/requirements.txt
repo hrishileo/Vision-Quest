@@ -1,0 +1,18 @@
+# Core
+numpy>=1.24.0
+opencv-python>=4.8.0
+PyYAML>=6.0
+
+# Point cloud & 3D
+open3d>=0.17.0
+
+# Optional but recommended for edge
+# torch  (install matching your Jetson / CUDA version)
+# torchvision
+
+# ROS 2 interop (optional)
+# rclpy
+
+# Streaming (later)
+# aiortc
+# av

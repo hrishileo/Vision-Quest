@@ -1,0 +1,40 @@
+# Horizon Vision - Sensor & Pipeline Configuration
+
+# Default standalone loop. Use --source web to listen for the 3D viewer,
+# or --source fixture --fixture tests/fixtures/web_samples.json.
+source: simulated
+
+ingest:
+  enabled: false
+  host: "127.0.0.1"
+  port: 8765
+  sync_window_ms: 50           # exclusive nearest-pair window
+
+sensors:
+  lidar:
+    enabled: true
+    type: "simulated"          # Options: simulated | web | livox | velodyne | ouster | generic_pcd
+    topic: "/lidar/points"     # For ROS 2 later
+    frame_id: "lidar_link"
+    max_range: 100.0           # meters
+    min_range: 0.5
+
+  camera:
+    enabled: true
+    type: "simulated"          # Options: simulated | web | usb | csi | ros
+    topic: "/camera/image_raw"
+    frame_id: "camera_link"
+    width: 1280
+    height: 720
+    fps: 30
+
+edge:
+  device: "cuda"               # cuda | cpu | mps
+  target_fps: 15
+  enable_visualization: true
+
+pipeline:
+  run_object_detection: true
+  run_semantic_segmentation: false
+  run_local_mapping: true
+  publish_rate_hz: 10

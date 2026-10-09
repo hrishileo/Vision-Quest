@@ -99,6 +99,8 @@ Until the dwell finishes, a stopped track still counts in the mean. A lane whose
 
 Defaults: hold 1.5 s, stationary ≤ 0.5 m/s, radius 4 m, slow below 4.0 m/s, stale 1.0 s, minimum confidence 0.2, maximum gap inside a dwell 0.5 s. The confidence floor is 0.2 because stopped cars in the CAM0 sample stay under 0.1 m/s while the ray confidence climbs through that value. Rays shallower than 0.2 stay `unknown`.
 
+The closed loop (`npm run loop`) opts into a stricter closure: `block_classes` is `unknown` only, so a stalled or queued vehicle stays `slow`, and debris may dwell at confidence 0.05. The hub side of that loop trusts a `blocked` reading down to 0.2, which is the edge's publish floor, and it drops an alert whose reason does not name a blocked lane. A brief `slow` reading on a southbound lane does not send that driver around the closure. The defaults above are unchanged. A camera pitched above the horizon still cannot close a lane, because the ground ray does not descend.
+
 Within the stale window, a lane with no new track keeps the last state so a one-frame miss does not flicker. After the window it becomes `unknown` with confidence 0.
 
 ## Label file

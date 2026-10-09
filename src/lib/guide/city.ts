@@ -39,7 +39,7 @@ export type Approach = "NS" | "EW";
 
 export type LaneDef = {
   id: string;
-  road: "mich" | "chi" | "rush" | "conn";
+  road: "mich" | "chi" | "rush" | "wabash" | "conn";
   approach: Approach;
   /** Constant axis value (x for Michigan, z for Chicago). */
   offset: number;
@@ -110,14 +110,18 @@ export const LANES: LaneDef[] = [
 export const LANE_BY_ID: Record<string, LaneDef> = Object.fromEntries(LANES.map((l) => [l.id, l]));
 
 /**
- * Rush Street, the one parallel detour added east of the lots.
- * The excerpt only had Michigan and Chicago, which do not close a block.
- * Building faces reach about x = 55. Lane 0 is the inner (west) lane.
- * `conn-wb-0` returns to Michigan at the north end of the block. The south
- * end uses the existing Chicago Avenue lane `chi-eb-0`. Wabash is not added.
- * The north return sits between the pumping station (z ≥ −33) and Water Tower Place (z ≤ −42).
+ * Parallel detours around the Michigan × Chicago excerpt.
+ * Rush is east of the lots (building faces reach about x = 55). Wabash is
+ * west of the lots (building faces reach about x = −55). Both are finite
+ * northbound streets. `conn-wb-0` returns from Rush to Michigan; `conn-eb-0`
+ * returns from Wabash. The south joins are Chicago Avenue `chi-eb-0` and
+ * `chi-wb-0`. The north return sits at z = −36.5, between the Water Tower
+ * (z ≥ −33) and 900 N Michigan (z ≤ −45).
+ * Hub lanes `rush-nb` and `wabash-nb` have no index. The drivable scene
+ * lanes are `rush-nb-0` and `wabash-nb-0`.
  */
 export const RUSH_X = [60.8, 64.4] as const;
+export const WABASH_X = [-62, -65.6] as const;
 export const CROSS_Z = -36.5;
 
 function rushLane(id: string, x: number, inner: boolean): LaneDef {
@@ -128,6 +132,26 @@ function rushLane(id: string, x: number, inner: boolean): LaneDef {
     approach: "NS",
     offset: x,
     s0: CHI_EB[0],
+    sign: -1,
+    axis: "z",
+    length,
+    heading: Math.PI,
+    stopS: length,
+    inner,
+    finite: true,
+    signal: false,
+    vMax: 6.5,
+  };
+}
+
+function wabashLane(id: string, x: number, inner: boolean): LaneDef {
+  const length = CHI_WB[0] - CROSS_Z;
+  return {
+    id,
+    road: "wabash",
+    approach: "NS",
+    offset: x,
+    s0: CHI_WB[0],
     sign: -1,
     axis: "z",
     length,
@@ -160,10 +184,33 @@ function connWest(id: string, z: number, x0: number, x1: number): LaneDef {
   };
 }
 
+function connEast(id: string, z: number, x0: number, x1: number): LaneDef {
+  const length = x1 - x0;
+  return {
+    id,
+    road: "conn",
+    approach: "EW",
+    offset: z,
+    s0: x0,
+    sign: 1,
+    axis: "x",
+    length,
+    heading: Math.PI / 2,
+    stopS: length,
+    inner: true,
+    finite: true,
+    signal: false,
+    vMax: 6.5,
+  };
+}
+
 export const DETOUR_LANES: LaneDef[] = [
   rushLane("rush-nb-0", RUSH_X[0], true),
   rushLane("rush-nb-1", RUSH_X[1], false),
+  wabashLane("wabash-nb-0", WABASH_X[0], true),
+  wabashLane("wabash-nb-1", WABASH_X[1], false),
   connWest("conn-wb-0", CROSS_Z, RUSH_X[0], MICH_NB[2]),
+  connEast("conn-eb-0", CROSS_Z, WABASH_X[0], MICH_NB[0]),
 ];
 
 const DETOUR_LANE_BY_ID: Record<string, LaneDef> = Object.fromEntries(

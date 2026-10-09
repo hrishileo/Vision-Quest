@@ -572,6 +572,37 @@ export class TrafficSim {
     return true;
   }
 
+  /**
+   * Planned Michigan lane change. Cars keep rolling and take the first
+   * non-overlapping gap inside the window. Stopping on a closed gap deadlocks
+   * two platoons that need to cross.
+   */
+  private transferLateral(car: SimCar, next: number, link: RouteLink, routeIndex: number): boolean {
+    const lo = link.fromS;
+    const hi = link.fromS + 16;
+    if (car.s < lo - 0.4 && next < lo) return false;
+    if (car.s > hi) return false;
+    const at = Math.max(car.s, lo);
+    if (!this.lateralClear(link.to, at, car)) return false;
+    car.laneId = link.to;
+    car.routeIndex = routeIndex + 1;
+    if (car.s < lo) car.s = lo;
+    return true;
+  }
+
+  /** Bumper gap only. A routed weave is allowed closer than a voluntary merge. */
+  private lateralClear(laneId: string, s: number, self: SimCar): boolean {
+    const lane = laneById(laneId);
+    if (!lane) return false;
+    for (const other of this.cars) {
+      if (other === self || other.parked || other.laneId !== laneId) continue;
+      let ds = Math.abs(other.s - s);
+      if (!lane.finite) ds = Math.min(ds, lane.length - ds);
+      if (ds < (self.length + other.length) * 0.5 + 0.7) return false;
+    }
+    return true;
+  }
+
   private transferIfDue(car: SimCar, next: number): boolean {
     const route = car.route;
     if (!route) return false;
@@ -581,6 +612,9 @@ export class TrafficSim {
     const to = route[i + 1];
     const link = this.links.find((l) => l.from === route[i] && l.to === to);
     if (!link) return false;
+    const lateral =
+      link.from.startsWith("mich-") && link.to.startsWith("mich-") && link.fromS === link.toS;
+    if (lateral) return this.transferLateral(car, next, link, i);
     if (car.s < link.fromS - 1.2 && next < link.fromS) return false;
     if (!this.entryClear(link.to, link.toS, car)) {
       car.s = link.fromS;

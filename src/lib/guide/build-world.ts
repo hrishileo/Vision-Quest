@@ -14,6 +14,7 @@ import {
   MICH_SB,
   RUSH_X,
   SPAN,
+  WABASH_X,
   overlapsRoad,
   type BuildingFoot,
 } from "./city";
@@ -535,6 +536,26 @@ export function addDetourRoads(world: WorldBuild): THREE.Group {
   group.add(along, cross);
   world.geometries.push(along.geometry, cross.geometry);
   world.group.add(group);
+  return group;
+}
+
+/** Rush, Wabash, and both returns. Used by the closed-loop view. */
+export function addLoopRoads(world: WorldBuild): THREE.Group {
+  const group = addDetourRoads(world);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x3a3c40, roughness: 0.92, metalness: 0.05 });
+  world.materials.push(mat);
+  const alongLen = CHI_WB[0] - CROSS_Z + 8;
+  const along = new THREE.Mesh(new THREE.PlaneGeometry(9.2, alongLen), mat);
+  along.rotation.x = -Math.PI / 2;
+  along.position.set((WABASH_X[0] + WABASH_X[1]) / 2, 0.03, (CHI_WB[0] + CROSS_Z) / 2);
+  along.receiveShadow = true;
+  const crossLen = MICH_NB[0] - WABASH_X[0] + 4;
+  const cross = new THREE.Mesh(new THREE.PlaneGeometry(crossLen, 6.2), mat);
+  cross.rotation.x = -Math.PI / 2;
+  cross.position.set((WABASH_X[0] + MICH_NB[0]) / 2, 0.032, CROSS_Z);
+  cross.receiveShadow = true;
+  group.add(along, cross);
+  world.geometries.push(along.geometry, cross.geometry);
   return group;
 }
 

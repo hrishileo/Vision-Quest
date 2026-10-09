@@ -1882,10 +1882,10 @@ export class GuideEngine {
   }
 
   private frameLoop() {
-    this.camera.fov = 42;
+    this.camera.fov = 58;
     this.camera.updateProjectionMatrix();
-    this.camera.position.set(2, 92, 78);
-    this.controls.target.set(0, 0.4, -14);
+    this.camera.position.set(0, 110, 36);
+    this.controls.target.set(0, 0, -18);
     this.controls.maxDistance = 240;
     this.controls.enableDamping = false;
     this.controls.update();
@@ -1895,7 +1895,7 @@ export class GuideEngine {
 
   private loadLoopView() {
     const scene = showcaseScene();
-    useGuide.setState({ paused: true, camView: "orbit", mode: "pursuit" });
+    useGuide.setState({ paused: true, camView: "orbit" });
     this.clearDetourVisual();
     this.world.sim.loadFleet(scene.cars, { seed: 1, blocks: scene.blocks, links: scene.links });
     this.detourRoads = addLoopRoads(this.world);

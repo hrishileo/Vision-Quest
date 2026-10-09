@@ -245,6 +245,7 @@ def test_loop_ignores_a_slow_southbound_lane_when_the_closure_is_northbound():
 def test_unknown_only_monitor_does_not_block_on_a_vehicle():
     monitor = monitor_for("loop")
     assert isinstance(monitor, LaneMonitor)
+    assert monitor.vehicle_stall_hold_s is None
     stall = EdgeEvent(
         cls="vehicle",
         unknown=False,

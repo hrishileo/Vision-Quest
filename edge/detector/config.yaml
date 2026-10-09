@@ -1,0 +1,19 @@
+# Fine-tune a nano detector for the Jetson Orin Nano.
+# yolov8n.pt is the default. yolo11n.pt is the same script with model swapped.
+model: yolov8n.pt
+imgsz: 320
+epochs: 20
+batch: 8
+device: cpu
+workers: 2
+classes:
+  0: vehicle
+  1: unknown
+export:
+  # Produced by: python edge/detector/export.py --weights edge/detector/runs/cam0/weights/best.pt
+  onnx: edge/detector/runs/cam0/weights/best.onnx
+  # On the Orin Nano, after copying the onnx:
+  tensorrt: /usr/src/tensorrt/bin/trtexec --onnx=best.onnx --saveEngine=best.fp16.engine --fp16
+notes: >
+  Train on CPU with a small corpus. Do not commit data/yolo, *.pt, *.onnx, or
+  the TensorRT engine. The committed sample is edge/detector/sample.

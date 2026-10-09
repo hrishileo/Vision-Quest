@@ -724,6 +724,7 @@ export type CorpusApi = {
   stop: () => void;
   download: () => Promise<void>;
   zip: () => Promise<Uint8Array>;
+  record: (spec: unknown) => Promise<{ id: string; frames: CorpusFrame[]; pngs: string[] }>;
   status: () => CorpusStatus;
 };
 

@@ -259,3 +259,32 @@ That CAM0 sample already contains close following under 2 s, including
 `veh-13` behind `veh-12` in `mich-sb-0`. The edge cases (open gap, stopped
 traffic, a shorter threshold, a one-frame blip, a lane change) are unit
 tests, not a second label file.
+
+## Detector
+
+The label path above is the scoring baseline. `horizon_vision.events.detect`
+runs the same tracker, lane-state monitor, and tailgate detector from image
+boxes. Pose still comes from the camera. A ByteTrack-style associator
+(`horizon_vision.events.associate`) assigns `trk-<n>` ids. The box's
+bottom-center ray hits the ground, and `lane_id_at` supplies the lane the
+label used to carry. Confidence is the lower of the ray confidence and the
+detector score.
+
+Train and compare:
+
+```bash
+node --experimental-strip-types scripts/record-corpus.ts --out data/yolo
+pip install -r edge/detector/requirements.txt
+python edge/detector/train.py --data data/yolo/data.yaml
+PYTHONPATH=edge/src python edge/detector/compare.py \
+  --data data/yolo --weights edge/detector/runs/cam0/weights/best.pt
+python edge/detector/export.py --weights edge/detector/runs/cam0/weights/best.pt
+```
+
+The corpus is split by sequence, not by frame. `data/yolo/` and the
+checkpoints are gitignored. `edge/detector/sample/` is a two-frame excerpt.
+Export writes ONNX next to the checkpoint. The Orin Nano engine is:
+
+```bash
+/usr/src/tensorrt/bin/trtexec --onnx=best.onnx --saveEngine=best.fp16.engine --fp16
+```

@@ -57,6 +57,8 @@ PYTHONPATH=edge/src:hub/src python -m horizon_vision.hub.bridge \
 
 `edge/legacy/` holds unmerged HorizonVision work (time sync and ingest, the LiDAR cluster detector, BEV metrics, the occupancy grid). It is not imported by the edge or the hub. See `edge/legacy/README.md`.
 
+The image detector is `edge/detector/` (YOLOv8n, two classes: `vehicle` and `unknown`). `scripts/record-corpus.ts` renders the training clips headless. Contract and the ONNX / TensorRT export line: `docs/edge-events.md`.
+
 ## Run
 
 ```bash

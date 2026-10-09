@@ -80,6 +80,9 @@ class VehicleState:
     y: float
     speed: float
     length: float = MAG_MILE_CAR_LENGTH_M
+    # Set when position and speed came from a detector track.
+    # None keeps TailgateDetector.confidence (1 for ground-truth labels).
+    confidence: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +93,7 @@ class _Pair:
     headway_s: float
     gap_m: float
     follower_speed: float
+    confidence: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,7 +276,7 @@ class TailgateDetector:
                         headway_s=pair.headway_s,
                         gap_m=pair.gap_m,
                         follower_speed=pair.follower_speed,
-                        confidence=self.confidence,
+                        confidence=pair.confidence,
                         t=t,
                     )
                 )
@@ -323,6 +327,9 @@ class TailgateDetector:
         headway = gap / follower.speed
         if headway >= self.threshold_s:
             return None
+        confidence = self.confidence
+        if leader.confidence is not None and follower.confidence is not None:
+            confidence = min(leader.confidence, follower.confidence)
         return _Pair(
             follower_track_id=follower.track_id,
             leader_track_id=leader.track_id,
@@ -330,6 +337,7 @@ class TailgateDetector:
             headway_s=headway,
             gap_m=gap,
             follower_speed=follower.speed,
+            confidence=confidence,
         )
 
 
@@ -345,6 +353,8 @@ def _check_vehicle(vehicle: VehicleState) -> None:
         raise ValueError("speed must be >= 0")
     if vehicle.length <= 0:
         raise ValueError("length must be positive")
+    if vehicle.confidence is not None and not 0 <= vehicle.confidence <= 1:
+        raise ValueError("confidence must be in [0, 1]")
 
 
 def vehicles_from_frame(frame: FrameLabels, length_m: float = MAG_MILE_CAR_LENGTH_M) -> list[VehicleState]:

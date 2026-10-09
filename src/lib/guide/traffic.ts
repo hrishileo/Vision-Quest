@@ -205,6 +205,8 @@ export class TrafficSim {
   signal: TrafficSnapshot["signal"] = "NS";
   blocks: LaneBlock[] = [];
   links: RouteLink[] = [];
+  /** 1 is the pursuit fleet. The headless corpus scales this per sequence. */
+  density = 1;
   private acc = 0;
   private rng: () => number = mulberry32(1);
 
@@ -212,7 +214,9 @@ export class TrafficSim {
     this.reset(seed);
   }
 
-  reset(seed = Date.now()) {
+  reset(seed = Date.now(), density = 1) {
+    const scale = Number.isFinite(density) ? Math.min(2, Math.max(0, density)) : 1;
+    this.density = scale;
     this.rng = mulberry32(seed >>> 0);
     this.time = 0;
     this.acc = 0;
@@ -702,7 +706,7 @@ export class TrafficSim {
       });
 
     for (const lane of LANES) {
-      const n = counts[lane.id] ?? 3;
+      const n = Math.round((counts[lane.id] ?? 3) * this.density);
       const queued = this.litFor(lane.approach) !== "g";
       let s = queued ? lane.stopS - 1.4 : lane.stopS - 10 - this.rng() * 36;
       let placed = 0;
@@ -753,7 +757,10 @@ export class TrafficSim {
       { x: -40, z: -PARK_Z, yaw: -Math.PI / 2 },
       { x: 44, z: -PARK_Z, yaw: -Math.PI / 2 },
     ];
+    const parkCount = Math.round(parks.length * this.density);
+    let parkedPlaced = 0;
     for (const p of parks) {
+      if (parkedPlaced >= parkCount) break;
       if (carHitsBuilding(p.x, p.z, p.yaw)) continue;
       const car: SimCar = {
         id,
@@ -778,6 +785,7 @@ export class TrafficSim {
       };
       this.cars.push(car);
       id += 1;
+      parkedPlaced += 1;
     }
   }
 }

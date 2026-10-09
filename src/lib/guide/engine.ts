@@ -56,8 +56,11 @@ import {
   rgbaToPng,
   vehicleRecord,
   writeBoxCorners,
+  type CorpusFrame,
   type CorpusObject,
 } from "./corpus";
+import { SUN, type SequenceSpec, type TimeOfDay } from "./corpus-sequences";
+import type { DebrisDef } from "./debris";
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -193,6 +196,10 @@ export class GuideEngine {
   private corpusAim = new THREE.Vector3();
   private corpusCamPos = new THREE.Vector3();
   private corpusRay = new THREE.Raycaster();
+  private scripted = false;
+  private scriptedTod: TimeOfDay | null = null;
+  private debrisHome: { id: number; x: number; z: number; yaw: number }[] | null = null;
+  private addedDebris: DebrisRig[] = [];
   private studioCarPhase = 0;
   private wasTouring = false;
   private detourRoads: THREE.Group | null = null;
@@ -529,6 +536,7 @@ export class GuideEngine {
       stop: () => useGuide.getState().setCorpusRecording(false),
       download: () => this.downloadCorpus(),
       zip: () => this.corpus.zip(),
+      record: (spec) => this.recordSequence(spec as SequenceSpec),
       status: () => ({
         recording: this.corpus.open,
         frames: this.corpus.frames.length,
@@ -712,6 +720,8 @@ export class GuideEngine {
       this.key.castShadow = false;
       this.rim.intensity = 0.25;
       this.renderer.toneMappingExposure = 1.2;
+    } else if (this.scriptedTod) {
+      this.applyScriptedSun(this.scriptedTod);
     } else {
       this.hemi.color.setHex(0xd5dbe0);
       this.hemi.groundColor.setHex(0x1a1c20);
@@ -827,7 +837,7 @@ export class GuideEngine {
     }
 
     if (isAir(s.mode)) {
-      this.updatePursuit(simDt, s.standoff, s.altitude, s.tightness);
+      if (!this.scripted) this.updatePursuit(simDt, s.standoff, s.altitude, s.tightness);
     } else if (s.mode === "vision") {
       this.updateVisionStudio(simDt, t);
     } else {
@@ -1695,6 +1705,175 @@ export class GuideEngine {
     if (useGuide.getState().corpusRecording) useGuide.getState().setCorpusRecording(false);
   }
 
+  private applyScriptedSun(tod: TimeOfDay) {
+    const sun = SUN[tod];
+    this.hemi.color.setHex(sun.hemi);
+    this.hemi.groundColor.setHex(sun.hemiGround);
+    this.hemi.intensity = sun.hemiIntensity;
+    this.key.color.setHex(sun.key);
+    this.key.intensity = sun.keyIntensity;
+    this.key.position.set(sun.keyPosition[0], sun.keyPosition[1], sun.keyPosition[2]);
+    this.key.castShadow = false;
+    this.rim.intensity = sun.rim;
+    this.scene.fog = this.pursuitFog;
+    this.pursuitFog.color.setHex(sun.fog);
+    this.pursuitFog.near = sun.fogNear;
+    this.pursuitFog.far = sun.fogFar;
+    const bg = this.scene.background;
+    if (bg instanceof THREE.Color) bg.setHex(sun.sky);
+    else this.scene.background = new THREE.Color(sun.sky);
+    this.scene.environmentIntensity = sun.env;
+    this.renderer.toneMappingExposure = sun.exposure;
+    if (this.bloomPass) this.bloomPass.strength = 0.12;
+  }
+
+  private aimDrone(
+    x: number,
+    altitude: number,
+    z: number,
+    lookX: number,
+    lookZ: number,
+    pitch: number,
+    roll: number,
+  ) {
+    this.dronePos.set(x, altitude, z);
+    this.yaw = Math.atan2(lookX - x, lookZ - z);
+    this.pitch = pitch;
+    this.roll = roll;
+    this.drone.group.position.copy(this.dronePos);
+    this.drone.group.rotation.order = "YXZ";
+    this.drone.group.rotation.set(this.pitch, this.yaw, this.roll);
+    this.drone.group.updateMatrixWorld(true);
+    const gPos = this.drone.gimbalYaw.getWorldPosition(_gpos);
+    const local = new THREE.Vector3(lookX - gPos.x, 0.4 - gPos.y, lookZ - gPos.z).applyQuaternion(
+      this.drone.group.getWorldQuaternion(_q).invert(),
+    );
+    const gy = Math.atan2(local.x, local.z);
+    const gp = Math.atan2(-local.y, Math.hypot(local.x, local.z));
+    this.drone.gimbalYaw.rotation.y = THREE.MathUtils.clamp(gy, -1.2, 1.2);
+    this.drone.gimbalPitch.rotation.x = THREE.MathUtils.clamp(gp, -1.05, 1.05);
+    this.drone.droneCam.updateMatrixWorld(true);
+  }
+
+  private restoreDebris() {
+    if (!this.debrisHome) {
+      this.debrisHome = this.world.debris
+        .filter((rig) => rig.id < 100)
+        .map((rig) => ({ id: rig.id, x: rig.def.x, z: rig.def.z, yaw: rig.def.yaw }));
+    }
+    for (const rig of this.addedDebris) {
+      this.world.group.remove(rig.group);
+      const index = this.world.debris.indexOf(rig);
+      if (index >= 0) this.world.debris.splice(index, 1);
+    }
+    this.addedDebris = [];
+    for (const home of this.debrisHome) {
+      const rig = this.world.debris.find((item) => item.id === home.id);
+      if (!rig) continue;
+      rig.def = { ...rig.def, x: home.x, z: home.z, yaw: home.yaw };
+      rig.group.position.set(home.x, 0, home.z);
+      rig.group.rotation.y = home.yaw;
+    }
+  }
+
+  private layoutDebris(spec: SequenceSpec) {
+    this.restoreDebris();
+    for (const move of spec.debris) {
+      const rig = this.world.debris.find((item) => item.id === move.id);
+      if (!rig) continue;
+      const yaw = move.yaw ?? rig.def.yaw;
+      rig.def = { ...rig.def, x: move.x, z: move.z, yaw };
+      rig.group.position.set(move.x, 0, move.z);
+      rig.group.rotation.y = yaw;
+    }
+    if (spec.blockades.length === 0) return;
+    const defs: DebrisDef[] = spec.blockades.map((block) => ({
+      id: block.id,
+      type: block.type,
+      kind: block.kind,
+      origin: "manmade",
+      label: "Lane blockade",
+      x: block.x,
+      z: block.z,
+      yaw: block.yaw,
+    }));
+    this.addedDebris = addLaneBlockades(this.world, defs);
+  }
+
+  /** Headless clip. The animation loop stays paused so the scripted pose is the one recorded. */
+  async recordSequence(
+    spec: SequenceSpec,
+  ): Promise<{ id: string; frames: CorpusFrame[]; pngs: string[] }> {
+    const guide = useGuide.getState();
+    const wasPaused = guide.paused;
+    this.scripted = true;
+    useGuide.setState({ paused: true });
+    guide.setCorpusRecording(true);
+    try {
+      if (guide.mode !== "pursuit") guide.setMode("pursuit");
+      if (this.lastMode !== "pursuit") {
+        this.onModeChange(this.lastMode, "pursuit");
+        this.lastMode = "pursuit";
+      }
+      this.studio.visible = false;
+      this.world.group.visible = true;
+      this.studioCar.visible = false;
+      this.scriptedTod = spec.timeOfDay;
+      this.applyScriptedSun(spec.timeOfDay);
+
+      this.world.sim.reset(spec.seed, spec.density);
+      syncWorldCars(this.world);
+      this.world.sim.blocks = spec.blockades.map((block) => ({
+        laneId: block.laneId,
+        s0: block.s0,
+        s1: block.s1,
+      }));
+      this.layoutDebris(spec);
+      const warmupSteps = Math.max(0, Math.round(spec.warmupS / SIM_STEP));
+      this.world.sim.advance(warmupSteps);
+      poseWorldCars(this.world, 0);
+      applySignalLights(this.world.signals, this.world.sim.nsLit, this.world.sim.ewLit);
+
+      this.corpus.start(spec.hz);
+      const frameSteps = Math.max(1, Math.round(1 / spec.hz / SIM_STEP));
+      const pngs: Promise<Uint8Array>[] = [];
+      for (let i = 0; i < spec.frames; i++) {
+        this.world.sim.advance(frameSteps);
+        poseWorldCars(this.world, 1 / spec.hz);
+        applySignalLights(this.world.signals, this.world.sim.nsLit, this.world.sim.ewLit);
+        const elapsed = i / spec.hz;
+        this.aimDrone(
+          spec.x + spec.driftX * elapsed,
+          spec.altitude,
+          spec.z + spec.driftZ * elapsed,
+          spec.lookX + spec.lookDriftX * elapsed,
+          spec.lookZ + spec.lookDriftZ * elapsed,
+          spec.pitch,
+          spec.roll,
+        );
+        const png = this.sampleCorpusFrame();
+        if (!png) throw new Error(`corpus frame ${i} did not render`);
+        pngs.push(png);
+      }
+      const frames = this.corpus.frames.slice();
+      const encoded = await Promise.all(pngs);
+      if (frames.length !== spec.frames) {
+        throw new Error(`recorded ${frames.length} frames, expected ${spec.frames}`);
+      }
+      return {
+        id: spec.id,
+        frames,
+        pngs: encoded.map((bytes) => bytesToBase64(bytes)),
+      };
+    } finally {
+      this.corpus.stop();
+      this.scripted = false;
+      this.scriptedTod = null;
+      guide.setCorpusRecording(false);
+      useGuide.setState({ paused: wasPaused });
+    }
+  }
+
   private captureCorpus() {
     const s = useGuide.getState();
     if (!isAir(s.mode)) return;
@@ -1772,7 +1951,7 @@ export class GuideEngine {
     return objects;
   }
 
-  private sampleCorpusFrame() {
+  private sampleCorpusFrame(): Promise<Uint8Array> | null {
     const cam = this.drone.droneCam;
     const prevAspect = cam.aspect;
     cam.aspect = CORPUS_WIDTH / CORPUS_HEIGHT;
@@ -1812,8 +1991,11 @@ export class GuideEngine {
       renderer.clear();
       renderer.render(this.scene, cam);
       const pixels = this.corpusPixels;
-      if (!pixels) return;
+      if (!pixels) return null;
       renderer.readRenderTargetPixels(target, 0, 0, CORPUS_WIDTH, CORPUS_HEIGHT, pixels);
+      if (this.corpus.frames.length === 0 && lumaSpread(pixels) < 4) {
+        throw new Error("CAM0 frame is flat; WebGL did not draw the scene");
+      }
       const png = rgbaToPng(
         flipRgbaBottomUp(pixels, CORPUS_WIDTH, CORPUS_HEIGHT),
         CORPUS_WIDTH,
@@ -1821,6 +2003,7 @@ export class GuideEngine {
       );
       this.corpus.push(frame, png);
       useGuide.getState().setCorpusStats(this.corpus.frames.length, this.corpus.achievedHz());
+      return png;
     } finally {
       renderer.setRenderTarget(prevTarget);
       renderer.setViewport(viewport);
@@ -1832,6 +2015,7 @@ export class GuideEngine {
         obj.visible = vis[i]!;
       });
     }
+    return null;
   }
 
   private async downloadCorpus() {
@@ -1983,4 +2167,28 @@ export class GuideEngine {
     this.labels.domElement.remove();
     this.renderer.domElement.remove();
   }
+}
+
+function lumaSpread(pixels: Uint8Array): number {
+  let n = 0;
+  let sum = 0;
+  let sum2 = 0;
+  for (let i = 0; i < pixels.length; i += 16) {
+    const y = ((pixels[i] ?? 0) + (pixels[i + 1] ?? 0) + (pixels[i + 2] ?? 0)) / 3;
+    sum += y;
+    sum2 += y * y;
+    n += 1;
+  }
+  if (n === 0) return 0;
+  const mean = sum / n;
+  return Math.sqrt(Math.max(0, sum2 / n - mean * mean));
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x4000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
 }

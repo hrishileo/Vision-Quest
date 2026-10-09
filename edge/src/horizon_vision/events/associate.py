@@ -11,6 +11,7 @@ point once a box has an id. This step only decides which box is which.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from horizon_vision.events.labels import BBox
@@ -67,15 +68,38 @@ def iou(a: DetBox | _Track, b: DetBox | _Track) -> float:
     return inter / union
 
 
+def association_score(track: _Track, box: DetBox, small_area: float, match_px: float) -> float:
+    """IoU, or a center score when both boxes are small.
+
+    Distant cars are a handful of pixels. A few pixels of motion drops their
+    IoU under a normal threshold and the id switches. The center score stays
+    high across that shift. Large boxes keep using IoU so neighboring cars
+    in a queue do not merge.
+    """
+    if track.cls != box.cls:
+        return 0.0
+    overlap = iou(track, box)
+    area = min(track.w * track.h, box.w * box.h)
+    if match_px <= 0 or area >= small_area:
+        return overlap
+    dist = math.hypot(
+        (track.u + track.w / 2) - (box.u + box.w / 2),
+        (track.v + track.h / 2) - (box.v + box.h / 2),
+    )
+    return max(overlap, max(0.0, 1.0 - dist / match_px))
+
+
 def _greedy_match(
     tracks: list[_Track],
     boxes: list[DetBox],
     threshold: float,
+    small_area: float = 1e9,
+    match_px: float = 0.0,
 ) -> tuple[list[tuple[int, int]], list[int], list[int]]:
     pairs: list[tuple[float, int, int]] = []
     for ti, track in enumerate(tracks):
         for bi, box in enumerate(boxes):
-            score = iou(track, box)
+            score = association_score(track, box, small_area, match_px)
             if score >= threshold:
                 pairs.append((score, ti, bi))
     pairs.sort(key=lambda item: item[0], reverse=True)
@@ -99,19 +123,33 @@ class ByteTrack:
 
     iou_threshold: float = 0.3
     high_conf: float = 0.25
+    # None uses ``high_conf``. Debris boxes are weaker than vehicles, so the
+    # detector path sets a lower birth threshold for ``unknown`` only.
+    unknown_high_conf: float | None = None
     max_misses: int = 5
+    # Boxes smaller than this (pixels squared) may match by center distance.
+    small_area: float = 256.0
+    match_px: float = 0.0
     _tracks: list[_Track] = field(default_factory=list)
     _next: int = 0
 
+    def _birth(self, box: DetBox) -> bool:
+        floor = self.high_conf
+        if box.cls == "unknown" and self.unknown_high_conf is not None:
+            floor = self.unknown_high_conf
+        return box.confidence >= floor
+
     def update(self, boxes: list[DetBox]) -> list[TrackedBox]:
-        high = [box for box in boxes if box.confidence >= self.high_conf]
-        low = [box for box in boxes if box.confidence < self.high_conf]
+        high = [box for box in boxes if self._birth(box)]
+        low = [box for box in boxes if not self._birth(box)]
 
         matched_high, free_track_idx, free_high = _greedy_match(
-            self._tracks, high, self.iou_threshold
+            self._tracks, high, self.iou_threshold, self.small_area, self.match_px
         )
         still = [self._tracks[ti] for ti in free_track_idx]
-        matched_low, _free_still, _free_low = _greedy_match(still, low, self.iou_threshold)
+        matched_low, _free_still, _free_low = _greedy_match(
+            still, low, self.iou_threshold, self.small_area, self.match_px
+        )
 
         claimed: set[int] = set()
         for ti, bi in matched_high:

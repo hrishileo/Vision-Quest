@@ -92,6 +92,11 @@ def main() -> int:
     device = args.device or str(cfg["device"])
     workers = int(cfg.get("workers", 2))
     seed = int(cfg.get("seed", 0))
+    extra: dict = {}
+    if cfg.get("lr0") is not None:
+        extra["lr0"] = float(cfg["lr0"])
+    if cfg.get("warmup_epochs") is not None:
+        extra["warmup_epochs"] = float(cfg["warmup_epochs"])
 
     from ultralytics import YOLO
 
@@ -112,6 +117,7 @@ def main() -> int:
         seed=seed,
         plots=False,
         verbose=True,
+        **extra,
     )
     best = project / args.name / "weights" / "best.pt"
     trained = YOLO(str(best))

@@ -5,11 +5,45 @@ model: yolov8n.pt
 # stride. At 320 the unknown class never received a positive sample that
 # survived the resize, and the head never predicted it.
 imgsz: 640
-epochs: 40
+# Stage-2 fine-tune from runs/cam0/weights/best.pt. Pass that checkpoint as
+# --model. A short lr keeps the vehicle head from forgetting.
+epochs: 30
+lr0: 0.0005
+warmup_epochs: 1
 seed: 0
 batch: 8
 device: cpu
 workers: 2
+# Inference. conf is the low floor; ByteTrack.unknown_high_conf births debris tracks.
+detect:
+  conf: 0.08
+  tile_w: 480
+  tile_h: 320
+  tile_overlap: 0.25
+  nms_iou: 0.5
+tracker:
+  iou_threshold: 0.15
+  high_conf: 0.25
+  unknown_high_conf: 0.12
+  max_misses: 8
+  small_area: 256
+  match_px: 18
+track_book:
+  max_misses: 8
+tailgate:
+  settle_s: 0.4
+  speed_band_mps: 2.5
+  gap_s: 0.45
+  min_speed_mps: 1.0
+  persist_s: 0.5
+lane:
+  # Same closure as the closed loop: only debris publishes blocked.
+  # Set vehicle_stall_hold_s (seconds, at least the lane hold) to also
+  # close a lane on a stopped vehicle after that longer dwell.
+  block_classes: [unknown]
+  debris_fuse: true
+  debris_hold_s: 1.5
+  blocked_hold_s: 1.5
 classes:
   0: vehicle
   1: unknown

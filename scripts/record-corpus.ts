@@ -194,11 +194,12 @@ function writeSample(sampleDir: string, recorded: RecordedSequence) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const wanted = args.only.length
+  const append = args.only.length > 0;
+  const wanted = append
     ? SEQUENCES.filter((seq) => args.only.includes(seq.id))
     : [...SEQUENCES];
   if (wanted.length === 0) throw new Error("no sequences selected");
-  rmSync(args.out, { recursive: true, force: true });
+  if (!append) rmSync(args.out, { recursive: true, force: true });
   mkdirSync(args.out, { recursive: true });
   writeYaml(args.out);
 
@@ -210,11 +211,28 @@ async function main() {
     let sample: RecordedSequence | null = null;
     for (const spec of wanted) {
       console.log(`recording ${spec.id} (${spec.split}, ${spec.timeOfDay}, density ${spec.density})`);
-      const recorded = await opened.page.evaluate(async (sequence) => {
-        const api = window.__corpus;
-        if (!api) throw new Error("recorder missing");
-        return api.record(sequence);
-      }, spec);
+      let recorded: { frames: CorpusFrame[]; pngs: string[] } | null = null;
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await opened.page.waitForFunction(() => typeof window.__corpus?.record === "function", null, {
+            timeout: 120_000,
+          });
+          recorded = await opened.page.evaluate(async (sequence) => {
+            const api = window.__corpus;
+            if (!api) throw new Error("recorder missing");
+            return api.record(sequence);
+          }, spec);
+          break;
+        } catch (err) {
+          lastError = err;
+          const message = err instanceof Error ? err.message : String(err);
+          if (!message.includes("context was destroyed") || attempt === 2) throw err;
+          console.log(`  navigation during ${spec.id}, retrying`);
+          await opened.page.waitForLoadState("domcontentloaded");
+        }
+      }
+      if (!recorded) throw lastError;
       const frames = recorded.frames as CorpusFrame[];
       const typed: RecordedSequence = { id: spec.id, frames, pngs: recorded.pngs };
       writeSequence(args.out, typed, spec);
@@ -222,7 +240,7 @@ async function main() {
       console.log(`  ${frames.length} frames, ${boxes} boxes`);
       if (!sample && spec.split === "train") sample = typed;
     }
-    if (sample) writeSample(args.sample, sample);
+    if (sample && !append) writeSample(args.sample, sample);
   } finally {
     await browser?.close();
     dev.stop();

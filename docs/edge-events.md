@@ -281,10 +281,24 @@ PYTHONPATH=edge/src python edge/detector/compare.py \
 python edge/detector/export.py --weights edge/detector/runs/cam0/weights/best.pt
 ```
 
-The corpus is split by sequence, not by frame. Training image size is
-`imgsz` in `edge/detector/config.yaml` (640). Debris boxes are often only a
-few dozen pixels in the 960-wide frame, and a 320 input drops them under the
-stride. `data/yolo/` and the checkpoints are gitignored.
+The corpus is split by sequence, not by frame. Close passes
+(`s12`–`s16`) put the drone a few metres over a cluster of debris kinds so
+those boxes are large. `edge/detector/balance.py` then writes a crop around
+the debris in each train frame. Training image size is `imgsz` in
+`edge/detector/config.yaml` (640). At inference the detector also runs
+overlapping tiles (`detect.tile_w` / `tile_h`) and merges them.
+
+Thresholds for the detector path live in that same file: ByteTrack's
+`match_px` and `max_misses` for distant cars, `unknown_high_conf` so a weak
+debris box can start a track, `tailgate.settle_s` so a queued car with a
+spiky tracked speed is not tailgating, and `lane.debris_fuse` so a debris
+hit plus slow traffic stays `blocked` after the box flickers. That path
+uses `block_classes: [unknown]`, the same closure as the closed loop, so a
+queued vehicle stays `slow` unless `vehicle_stall_hold_s` is set. The label
+path leaves `settle_s` at 0 and `debris_fuse` off, and still lets a stopped
+vehicle close a lane.
+
+`data/yolo/` and the checkpoints are gitignored.
 `edge/detector/sample/` is a two-frame excerpt.
 Export writes ONNX next to the checkpoint. The Orin Nano engine is:
 

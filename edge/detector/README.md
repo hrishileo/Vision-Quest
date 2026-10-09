@@ -6,8 +6,9 @@ Sequences are rendered by the pursuit recorder, then split by sequence id into t
 
 ```bash
 node --experimental-strip-types scripts/record-corpus.ts --out data/yolo
+python edge/detector/balance.py --data data/yolo
 pip install -r edge/detector/requirements.txt
-python edge/detector/train.py --data data/yolo/data.yaml
+python edge/detector/train.py --data data/yolo/data.yaml --model edge/detector/runs/cam0/weights/best.pt
 PYTHONPATH=edge/src python edge/detector/compare.py \
   --data data/yolo --weights edge/detector/runs/cam0/weights/best.pt
 python edge/detector/export.py --weights edge/detector/runs/cam0/weights/best.pt

@@ -90,6 +90,38 @@ def test_headway_above_threshold_is_not_flagged():
     assert events == []
 
 
+def test_unsettled_speed_does_not_flag_queued_traffic():
+    # Geometry is a violation whenever the sample is above 1 m/s. The speed
+    # alternates, the way a queued east-west track does, so it must not flag.
+    detector = TailgateDetector(settle_s=0.4, speed_band_mps=1.5, persist_s=0.3)
+    events = []
+    for i in range(16):
+        speed = 0.2 if i % 2 == 0 else 3.2
+        events.extend(detector.update(i * 0.1, _pair("chi-eb-0", gap_m=2.0, speed=speed)))
+    assert events == []
+
+
+def test_settled_speed_still_flags_after_the_window():
+    detector = TailgateDetector(settle_s=0.3, speed_band_mps=1.5, persist_s=0.4)
+    events = _run(detector, _pair("mich-sb-0", gap_m=8.0, speed=10.0), steps=12)
+    assert events
+    assert events[0].t == pytest.approx(0.7)
+    assert events[0].lane == "mich-sb-0"
+
+
+def test_a_one_frame_gap_keeps_the_tailgate_timer():
+    held = TailgateDetector(persist_s=0.5, gap_s=0.25)
+    dropped = TailgateDetector(persist_s=0.5, gap_s=0.0)
+    held_events = []
+    dropped_events = []
+    for i in range(8):
+        vehicles = [] if i == 3 else _pair("mich-sb-2", gap_m=8.0, speed=10.0)
+        held_events.extend(held.update(i * 0.1, vehicles))
+        dropped_events.extend(dropped.update(i * 0.1, vehicles))
+    assert held_events
+    assert dropped_events == []
+
+
 def test_stopped_and_creeping_traffic_is_not_flagged():
     # 0.5 m at 10 m/s is a 0.05 s headway, so the geometry itself is a violation.
     # Speed 0 and 0.5 m/s are queued traffic and must not flag.

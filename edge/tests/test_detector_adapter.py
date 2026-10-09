@@ -77,6 +77,34 @@ def test_bytetrack_holds_a_box_and_drops_it():
     assert revived[0].track_id == "trk-1"
 
 
+def test_small_distant_box_keeps_its_id_when_iou_collapses():
+    # An 8x6 box shifted by 6 px has IoU about 0.14, under the 0.3 threshold.
+    # Center distance is 6 px, inside match_px, so the id has to survive.
+    tracker = ByteTrack(
+        iou_threshold=0.3,
+        high_conf=0.5,
+        max_misses=4,
+        small_area=256,
+        match_px=18,
+    )
+    first = tracker.update([DetBox("vehicle", 0.9, 100, 80, 8, 6)])
+    assert first[0].track_id == "trk-0"
+    shifted = tracker.update([DetBox("vehicle", 0.9, 106, 80, 8, 6)])
+    assert [box.track_id for box in shifted] == ["trk-0"]
+    weak = tracker.update([DetBox("vehicle", 0.12, 110, 82, 8, 6)])
+    assert [box.track_id for box in weak] == ["trk-0"]
+    assert tracker.update([]) == []
+    back = tracker.update([DetBox("vehicle", 0.8, 112, 82, 8, 6)])
+    assert back[0].track_id == "trk-0"
+
+
+def test_a_different_class_does_not_steal_the_track():
+    tracker = ByteTrack(iou_threshold=0.1, small_area=10_000, match_px=30, high_conf=0.5)
+    tracker.update([_center("vehicle", confidence=0.9)])
+    other = tracker.update([_center("unknown", confidence=0.9)])
+    assert [box.track_id for box in other] == ["trk-1"]
+
+
 def test_low_confidence_box_does_not_start_a_track():
     tracker = ByteTrack(high_conf=0.5)
     assert tracker.update([_center("unknown", confidence=0.1)]) == []

@@ -18,6 +18,13 @@ Priority, first match:
 3. Mean speed is below ``slow_mps`` → ``slow``.
 4. Otherwise → ``clear``.
 
+``debris_fuse`` is off by default. When it is on, an ``unknown`` hit plus a
+mean speed under ``slow_mps`` also publishes ``blocked``, and that decision
+is held for ``blocked_hold_s`` after the box drops. A vehicle stall does not
+take this shortcut: it still waits for ``vehicle_stall_hold_s`` when that
+flag is set, and it stays ``slow`` when the flag is off and ``vehicle`` is
+not in ``block_classes``.
+
 A low-confidence sample does not start or extend a dwell. Changing lane,
 moving off the anchor, or a gap longer than ``max_gap_s`` starts it over.
 One sample cannot finish a hold (``hold_s`` must be positive).
@@ -210,8 +217,17 @@ class LaneMonitor:
     # after this dwell even if ``vehicle`` is not in ``block_classes``.
     # It must be at least ``hold_s``, so a stall waits longer than debris.
     vehicle_stall_hold_s: float | None = None
+    # When set, a debris (``unknown``) hit plus a slow lane is ``blocked``,
+    # and that decision is held after the box flickers out. Off by default
+    # so the label path still waits out ``hold_s`` on a stationary object.
+    # It does not let a vehicle stall skip ``vehicle_stall_hold_s``.
+    debris_fuse: bool = False
+    debris_hold_s: float = 1.5
+    blocked_hold_s: float = 1.5
     _episodes: dict[str, _Episode] = field(default_factory=dict)
     _lanes: dict[str, _LaneMemory] = field(default_factory=dict)
+    _debris_at: dict[str, float] = field(default_factory=dict)
+    _blocked_until: dict[str, float] = field(default_factory=dict)
     _last_t: float | None = None
 
     def __post_init__(self) -> None:
@@ -236,6 +252,10 @@ class LaneMonitor:
             raise ValueError("unknown_min_confidence must be in [0, 1]")
         if self.vehicle_stall_hold_s is not None and self.vehicle_stall_hold_s < self.hold_s:
             raise ValueError("vehicle_stall_hold_s must be at least hold_s")
+        if not math.isfinite(self.debris_hold_s) or self.debris_hold_s < 0:
+            raise ValueError("debris_hold_s must be >= 0")
+        if not math.isfinite(self.blocked_hold_s) or self.blocked_hold_s < 0:
+            raise ValueError("blocked_hold_s must be >= 0")
 
     def update(self, t: float, tracks: Sequence[EdgeEvent]) -> list[LaneStateEvent]:
         if not math.isfinite(t):
@@ -351,11 +371,36 @@ class LaneMonitor:
                 speed=None,
                 confidence=max(event.confidence for event in events),
             )
+        lane = qualifying[0].lane
         speed = sum(event.speed for event in qualifying) / len(qualifying)
         confidence = sum(event.confidence for event in qualifying) / len(qualifying)
-        if any(self._blocking(event, t) for event in qualifying):
+        fresh_debris = self.debris_fuse and lane is not None and any(
+            event.cls == "unknown" for event in qualifying
+        )
+        if fresh_debris and lane is not None:
+            self._debris_at[lane] = t
+        recent_debris = (
+            self.debris_fuse
+            and lane is not None
+            and t - self._debris_at.get(lane, -1e9) <= self.debris_hold_s
+        )
+        stationary = any(self._blocking(event, t) for event in qualifying)
+        slowdown = speed < self.slow_mps
+        # Refresh the hold only from a live reason (a stopped object, or a
+        # debris hit that is still inside ``debris_hold_s``). Extending it
+        # from the hold itself would never expire.
+        if stationary or (recent_debris and slowdown):
             state = "blocked"
-        elif speed < self.slow_mps:
+            if self.debris_fuse and lane is not None:
+                self._blocked_until[lane] = t + self.blocked_hold_s
+        elif (
+            self.debris_fuse
+            and lane is not None
+            and slowdown
+            and t <= self._blocked_until.get(lane, -1.0)
+        ):
+            state = "blocked"
+        elif slowdown:
             state = "slow"
         else:
             state = "clear"

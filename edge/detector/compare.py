@@ -17,21 +17,57 @@ import time
 from pathlib import Path
 
 import yaml
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = Path(__file__).resolve().parent / "config.yaml"
 sys.path.insert(0, str(ROOT / "edge" / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from horizon_vision.events.associate import ByteTrack, DetBox  # noqa: E402
 from horizon_vision.events.detect import (  # noqa: E402
     compare_lane_states,
     compare_tailgates,
     run_detector_pipeline,
 )
 from horizon_vision.events.labels import read_jsonl  # noqa: E402
-from horizon_vision.events.lane_state import collect_lane_states  # noqa: E402
-from horizon_vision.events.tailgate import detect_tailgates  # noqa: E402
+from horizon_vision.events.lane_state import LaneMonitor, collect_lane_states  # noqa: E402
+from horizon_vision.events.tailgate import TailgateDetector, detect_tailgates  # noqa: E402
+from horizon_vision.events.tiles import count_matches  # noqa: E402
+from horizon_vision.events.tracking import TrackBook  # noqa: E402
 from yolo import YoloDetector  # noqa: E402
+
+
+def _section(cfg: dict, name: str) -> dict:
+    raw = cfg.get(name, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def yolo_truth(path: Path, width: int, height: int) -> list[DetBox]:
+    names = {0: "vehicle", 1: "unknown"}
+    boxes: list[DetBox] = []
+    if not path.is_file():
+        return boxes
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        cls_id, cx, cy, bw, bh = line.split()[:5]
+        name = names.get(int(cls_id))
+        if name is None:
+            continue
+        pw = float(bw) * width
+        ph = float(bh) * height
+        boxes.append(
+            DetBox(
+                cls=name,
+                confidence=1.0,
+                u=float(cx) * width - pw / 2,
+                v=float(cy) * height - ph / 2,
+                w=pw,
+                h=ph,
+            )
+        )
+    return boxes
 
 
 def sequences(data: Path, split_name: str) -> list[Path]:
@@ -83,7 +119,52 @@ def main() -> int:
     weights = Path(args.weights)
     if not weights.is_file():
         raise SystemExit(f"missing weights: {weights}")
-    detector = YoloDetector(weights, conf=0.25, imgsz=args.imgsz, device="cpu")
+    detect_cfg = _section(cfg, "detect")
+    track_cfg = _section(cfg, "tracker")
+    tail_cfg = _section(cfg, "tailgate")
+    lane_cfg = _section(cfg, "lane")
+    book_cfg = _section(cfg, "track_book")
+    def fresh_runtime():
+        return (
+            ByteTrack(
+                iou_threshold=float(track_cfg.get("iou_threshold", 0.15)),
+                high_conf=float(track_cfg.get("high_conf", 0.25)),
+                unknown_high_conf=float(track_cfg.get("unknown_high_conf", 0.12)),
+                max_misses=int(track_cfg.get("max_misses", 8)),
+                small_area=float(track_cfg.get("small_area", 256)),
+                match_px=float(track_cfg.get("match_px", 18)),
+            ),
+            TrackBook(max_misses=int(book_cfg.get("max_misses", 8))),
+            LaneMonitor(
+                debris_fuse=bool(lane_cfg.get("debris_fuse", True)),
+                debris_hold_s=float(lane_cfg.get("debris_hold_s", 1.5)),
+                blocked_hold_s=float(lane_cfg.get("blocked_hold_s", 1.5)),
+                block_classes=tuple(lane_cfg.get("block_classes", ["unknown"])),
+                vehicle_stall_hold_s=(
+                    None
+                    if lane_cfg.get("vehicle_stall_hold_s") is None
+                    else float(lane_cfg["vehicle_stall_hold_s"])
+                ),
+            ),
+            TailgateDetector(
+                settle_s=float(tail_cfg.get("settle_s", 0.4)),
+                speed_band_mps=float(tail_cfg.get("speed_band_mps", 2.5)),
+                gap_s=float(tail_cfg.get("gap_s", 0.45)),
+                min_speed_mps=float(tail_cfg.get("min_speed_mps", 1.0)),
+                persist_s=float(tail_cfg.get("persist_s", 0.5)),
+            ),
+        )
+
+    detector = YoloDetector(
+        weights,
+        conf=float(detect_cfg.get("conf", 0.08)),
+        imgsz=args.imgsz,
+        device="cpu",
+        tile_w=int(detect_cfg.get("tile_w", 0)),
+        tile_h=int(detect_cfg.get("tile_h", 0)),
+        tile_overlap=float(detect_cfg.get("tile_overlap", 0.25)),
+        nms_iou=float(detect_cfg.get("nms_iou", 0.5)),
+    )
     annotated = Path(args.annotated)
 
     gt_tail = []
@@ -91,6 +172,7 @@ def main() -> int:
     gt_lanes = []
     det_lanes = []
     infer_ms: list[float] = []
+    box_totals: dict[str, dict[str, int]] = {}
     saved = 0
     for seq_dir in sequences(data, args.split):
         frames = read_jsonl(seq_dir / "labels.jsonl")
@@ -109,7 +191,24 @@ def main() -> int:
             t0 = time.perf_counter()
             batches.append(detector.detect(str(image)))
             infer_ms.append((time.perf_counter() - t0) * 1000.0)
-        detected = run_detector_pipeline(frames, [None] * len(frames), _Replay(batches))
+        for image, preds in zip(images, batches):
+            with Image.open(image) as handle:
+                width, height = handle.size
+            truth = yolo_truth(seq_dir / "labels" / f"{image.stem}.txt", width, height)
+            for cls, row in count_matches(preds, truth).items():
+                bucket = box_totals.setdefault(cls, {"matched": 0, "predicted": 0, "truth": 0})
+                for key, value in row.items():
+                    bucket[key] += value
+        box_tracker, book, lane_monitor, tailgate = fresh_runtime()
+        detected = run_detector_pipeline(
+            frames,
+            [None] * len(frames),
+            _Replay(batches),
+            box_tracker=box_tracker,
+            book=book,
+            lane_monitor=lane_monitor,
+            tailgate=tailgate,
+        )
         det_tail.extend(detected.tailgates)
         det_lanes.extend(detected.lane_states)
         if frames:
@@ -136,12 +235,25 @@ def main() -> int:
         except ValueError:
             return str(resolved)
 
+    def _rate(row: dict[str, int]) -> dict[str, float | int]:
+        matched = row["matched"]
+        predicted = row["predicted"]
+        truth = row["truth"]
+        return {
+            "matched": matched,
+            "predicted": predicted,
+            "truth": truth,
+            "precision": (matched / predicted) if predicted else (1.0 if truth == 0 else 0.0),
+            "recall": (matched / truth) if truth else (1.0 if predicted == 0 else 0.0),
+        }
+
     report = {
         "weights": _rel(weights),
         "split": args.split,
         "frames": len(infer_ms),
         "inference_ms_cpu": mean_ms,
         "metrics": metrics,
+        "boxes_iou50": {cls: _rate(row) for cls, row in sorted(box_totals.items())},
         "tailgate": compare_tailgates(gt_tail, det_tail),
         "lane_state": compare_lane_states(gt_lanes, det_lanes),
         "annotated": _rel(annotated),
@@ -149,7 +261,7 @@ def main() -> int:
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({k: report[k] for k in ("inference_ms_cpu", "tailgate", "lane_state")}, indent=2))
+    print(json.dumps({k: report[k] for k in ("inference_ms_cpu", "boxes_iou50", "tailgate", "lane_state")}, indent=2))
     return 0
 
 

@@ -32,6 +32,10 @@ describe("CAM0 training sequences", () => {
 
     const moved = SEQUENCES.reduce((n, seq) => n + seq.debris.length, 0);
     assert.ok(moved >= 4);
+    const close = split.train.filter((seq) => seq.altitude <= 5 && seq.debris.length >= 4);
+    assert.ok(close.length >= 3, "close debris passes");
+    const closeIds = new Set(close.flatMap((seq) => seq.debris.map((item) => item.id)));
+    assert.ok(closeIds.size >= 8, "close passes should move most debris kinds");
     assert.ok(split.train.some((seq) => seq.blockades.length > 0));
     assert.ok(split.test.some((seq) => seq.blockades.length > 0));
 

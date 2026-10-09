@@ -132,8 +132,24 @@ def run_detector_pipeline(
     """Detect, associate, project, then the same track, lane, and tailgate steps."""
     if len(frames) != len(images):
         raise ValueError("frames and images must be the same length")
-    associator = box_tracker if box_tracker is not None else ByteTrack()
-    tracker = book if book is not None else TrackBook()
+    associator = box_tracker if box_tracker is not None else ByteTrack(
+        iou_threshold=0.15,
+        high_conf=0.25,
+        unknown_high_conf=0.12,
+        max_misses=8,
+        small_area=256.0,
+        match_px=18.0,
+    )
+    tracker = book if book is not None else TrackBook(max_misses=8)
+    if lane_monitor is None:
+        lane_monitor = LaneMonitor(
+            debris_fuse=True,
+            debris_hold_s=1.5,
+            blocked_hold_s=1.5,
+            block_classes=("unknown",),
+        )
+    if tailgate is None:
+        tailgate = TailgateDetector(settle_s=0.4, speed_band_mps=2.5, gap_s=0.45)
     events: list[EdgeEvent] = []
     per_frame: list[list[TrackedBox]] = []
     detections = 0

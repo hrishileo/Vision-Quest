@@ -2,6 +2,11 @@ import { create } from "zustand";
 import type { BuildView, CamView, LockState, Mode, Telemetry } from "./types";
 import { isAir } from "./types";
 
+function clampCorpusHz(hz: number): number {
+  if (!Number.isFinite(hz)) return 10;
+  return Math.min(30, Math.max(1, hz));
+}
+
 const DEFAULT_TELEMETRY: Telemetry = {
   alt: 0,
   speed: 0,
@@ -41,6 +46,10 @@ type GuideState = {
   telemetry: Telemetry;
   rangeHist: number[];
   ready: boolean;
+  corpusRecording: boolean;
+  corpusHz: number;
+  corpusFrames: number;
+  corpusAchievedHz: number;
   setMode: (mode: Mode) => void;
   setSelected: (id: string | null) => void;
   setHovered: (id: string | null) => void;
@@ -60,6 +69,10 @@ type GuideState = {
   setTightness: (n: number) => void;
   setTelemetry: (t: Telemetry, rangeSample?: number) => void;
   setReady: (v: boolean) => void;
+  setCorpusRecording: (v: boolean) => void;
+  toggleCorpus: () => void;
+  setCorpusHz: (n: number) => void;
+  setCorpusStats: (frames: number, achievedHz: number) => void;
 };
 
 export const useGuide = create<GuideState>((set) => ({
@@ -80,6 +93,10 @@ export const useGuide = create<GuideState>((set) => ({
   telemetry: DEFAULT_TELEMETRY,
   rangeHist: Array.from({ length: 48 }, () => 0),
   ready: false,
+  corpusRecording: false,
+  corpusHz: 10,
+  corpusFrames: 0,
+  corpusAchievedHz: 0,
   setMode: (mode) =>
     set((s) => {
       if (s.mode === mode) return {};
@@ -155,6 +172,10 @@ export const useGuide = create<GuideState>((set) => ({
       return { telemetry, rangeHist };
     }),
   setReady: (ready) => set({ ready }),
+  setCorpusRecording: (corpusRecording) => set({ corpusRecording }),
+  toggleCorpus: () => set((s) => ({ corpusRecording: !s.corpusRecording })),
+  setCorpusHz: (corpusHz) => set({ corpusHz: clampCorpusHz(corpusHz) }),
+  setCorpusStats: (corpusFrames, corpusAchievedHz) => set({ corpusFrames, corpusAchievedHz }),
 }));
 
 export const LOCK_LABEL: Record<LockState, string> = {

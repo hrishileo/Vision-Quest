@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Aperture,
   Camera,
@@ -145,6 +146,13 @@ export function Overlay() {
   const setTightness = useGuide((s) => s.setTightness);
   const tel = useGuide((s) => s.telemetry);
   const hist = useGuide((s) => s.rangeHist);
+  const corpusRecording = useGuide((s) => s.corpusRecording);
+  const corpusHz = useGuide((s) => s.corpusHz);
+  const corpusFrames = useGuide((s) => s.corpusFrames);
+  const corpusAchievedHz = useGuide((s) => s.corpusAchievedHz);
+  const toggleCorpus = useGuide((s) => s.toggleCorpus);
+  const setCorpusHz = useGuide((s) => s.setCorpusHz);
+  const [corpusBusy, setCorpusBusy] = useState(false);
   const air = isAir(mode);
 
   const activeId = selected ?? hovered;
@@ -393,6 +401,59 @@ export function Overlay() {
               <p className="mt-1 font-mono text-2xs uppercase tracking-[0.14em] text-muted">
                 Signal {tel.traffic.signal} · queue {tel.traffic.queueM.toFixed(0)} m
               </p>
+            </div>
+          )}
+
+          {mode === "pursuit" && (
+            <div className="hud-panel rounded-xl p-4">
+              <p className="font-mono text-2xs uppercase tracking-[0.18em] text-subtle">
+                CAM0 corpus
+              </p>
+              <h2 className="mt-1 text-lg font-medium tracking-tight">Ground truth</h2>
+              <p className="mt-1 text-xs leading-relaxed text-muted">
+                Sim labels for training. Not detections.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => toggleCorpus()}
+                  className={
+                    "min-h-9 rounded-sm px-2.5 py-1.5 font-mono text-2xs uppercase tracking-[0.14em] " +
+                    (corpusRecording ? "bg-fg text-accent-fg" : "bg-surface text-muted hover:text-fg")
+                  }
+                >
+                  {corpusRecording ? "Stop" : "Record"}
+                </button>
+                <select
+                  aria-label="Corpus sample rate"
+                  value={corpusHz}
+                  disabled={corpusRecording}
+                  onChange={(e) => setCorpusHz(Number(e.target.value))}
+                  className="min-h-9 rounded-sm bg-surface px-2 font-mono text-2xs uppercase tracking-[0.14em] text-fg disabled:opacity-50"
+                >
+                  {[5, 10, 15, 30].map((hz) => (
+                    <option key={hz} value={hz}>
+                      {hz} Hz
+                    </option>
+                  ))}
+                </select>
+                <span className="font-mono text-2xs uppercase tracking-[0.12em] text-muted">
+                  {corpusFrames} frames
+                  {corpusFrames >= 2 ? ` · ${corpusAchievedHz.toFixed(1)} Hz` : ""}
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={corpusFrames === 0 || corpusBusy}
+                onClick={() => {
+                  setCorpusBusy(true);
+                  const job = window.__corpus?.download() ?? Promise.resolve();
+                  void job.finally(() => setCorpusBusy(false));
+                }}
+                className="mt-3 min-h-9 rounded-sm bg-surface px-2.5 py-1.5 font-mono text-2xs uppercase tracking-[0.14em] text-muted hover:text-fg disabled:opacity-40"
+              >
+                {corpusBusy ? "Packing" : "Download run"}
+              </button>
             </div>
           )}
 

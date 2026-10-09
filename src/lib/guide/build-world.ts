@@ -5,17 +5,19 @@ import {
   CHI_CURB,
   CHI_EB,
   CHI_WB,
+  CROSS_Z,
   INTER_HALF_X,
   INTER_HALF_Z,
   MAG_MILE,
   MICH_CURB,
   MICH_NB,
   MICH_SB,
+  RUSH_X,
   SPAN,
   overlapsRoad,
   type BuildingFoot,
 } from "./city";
-import { TrafficSim, type TrafficDiag } from "./traffic";
+import { TrafficSim, type SimCar, type TrafficDiag } from "./traffic";
 import { DEBRIS, type DebrisDef } from "./debris";
 
 export type CarRig = {
@@ -51,15 +53,10 @@ export type WorldBuild = {
   sim: TrafficSim;
   signals: SignalHead[];
   loc: typeof MAG_MILE;
+  spawnCar: (car: SimCar) => CarRig;
 };
 
-function mesh(
-  geo: THREE.BufferGeometry,
-  mat: THREE.Material,
-  x = 0,
-  y = 0,
-  z = 0,
-): THREE.Mesh {
+function mesh(geo: THREE.BufferGeometry, mat: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
   const m = new THREE.Mesh(geo, mat);
   m.position.set(x, y, z);
   m.castShadow = true;
@@ -144,24 +141,12 @@ function buildCastle(
     [inset, inset],
   ];
   for (const [ox, oz] of corners) {
-    const t = mesh(
-      cyl,
-      stone,
-      foot.x + ox * foot.sx,
-      foot.h * 0.55,
-      foot.z + oz * foot.sz,
-    );
+    const t = mesh(cyl, stone, foot.x + ox * foot.sx, foot.h * 0.55, foot.z + oz * foot.sz);
     t.scale.set(1.6, foot.h * 1.05, 1.6);
     t.userData.building = true;
     group.add(t);
     buildings.push(t);
-    const cap = mesh(
-      cone,
-      roof,
-      foot.x + ox * foot.sx,
-      foot.h * 1.12,
-      foot.z + oz * foot.sz,
-    );
+    const cap = mesh(cone, roof, foot.x + ox * foot.sx, foot.h * 1.12, foot.z + oz * foot.sz);
     cap.scale.set(2.1, 4.2, 2.1);
     group.add(cap);
   }
@@ -409,11 +394,7 @@ export function buildWorld(): WorldBuild {
     group.add(b);
     buildings.push(b);
     const win = mesh(boxGeo, windowMat, foot.x, foot.h * 0.55, foot.z);
-    win.scale.set(
-      foot.sx * (foot.kind === "glass" ? 0.92 : 0.72),
-      foot.h * 0.55,
-      foot.sz * 1.02,
-    );
+    win.scale.set(foot.sx * (foot.kind === "glass" ? 0.92 : 0.72), foot.h * 0.55, foot.sz * 1.02);
     win.castShadow = false;
     group.add(win);
   }
@@ -483,13 +464,12 @@ export function buildWorld(): WorldBuild {
   const carMats = { body: bodyProto, glass, rubber, light };
 
   const sim = new TrafficSim((Date.now() ^ 0x9e3779b9) >>> 0);
-  const cars: CarRig[] = sim.cars.map((c) => {
+  const rigFor = (c: SimCar): CarRig => {
     const built = makeCar(c.color, [bodyGeo, cabinGeo, wheelGeo, lampGeo], carMats);
     built.group.userData.car = true;
     built.group.userData.carIndex = c.id;
     built.group.position.set(c.x, 0, c.z);
     built.group.rotation.y = c.yaw;
-    group.add(built.group);
     return {
       group: built.group,
       wheels: built.wheels,
@@ -497,7 +477,13 @@ export function buildWorld(): WorldBuild {
       color: c.color,
       parked: c.parked,
     };
-  });
+  };
+  const spawnCar = (c: SimCar) => {
+    const rig = rigFor(c);
+    group.add(rig.group);
+    return rig;
+  };
+  const cars: CarRig[] = sim.cars.map((c) => spawnCar(c));
 
   const debris = spawnDebris(group, geos, materials, {
     rubber,
@@ -521,14 +507,77 @@ export function buildWorld(): WorldBuild {
     sim,
     signals,
     loc: MAG_MILE,
+    spawnCar,
   };
 }
 
-export function applySignalLights(
-  signals: SignalHead[],
-  ns: "g" | "y" | "r",
-  ew: "g" | "y" | "r",
-) {
+export function syncWorldCars(world: WorldBuild) {
+  for (const rig of world.cars) world.group.remove(rig.group);
+  world.cars = world.sim.cars.map((car) => world.spawnCar(car));
+}
+
+/** Pavement for the measurement loop. Not part of the default road mesh. */
+export function addDetourRoads(world: WorldBuild): THREE.Group {
+  const mat = new THREE.MeshStandardMaterial({ color: 0x3a3c40, roughness: 0.92, metalness: 0.05 });
+  world.materials.push(mat);
+  const group = new THREE.Group();
+  group.name = "detour-roads";
+  const sideLen = CHI_EB[0] - CROSS_Z + 8;
+  const along = new THREE.Mesh(new THREE.PlaneGeometry(9.2, sideLen), mat);
+  along.rotation.x = -Math.PI / 2;
+  along.position.set((RUSH_X[0] + RUSH_X[1]) / 2, 0.03, (CHI_EB[0] + CROSS_Z) / 2);
+  along.receiveShadow = true;
+  const crossLen = RUSH_X[0] - MICH_NB[2] + 4;
+  const cross = new THREE.Mesh(new THREE.PlaneGeometry(crossLen, 6.2), mat);
+  cross.rotation.x = -Math.PI / 2;
+  cross.position.set((RUSH_X[0] + MICH_NB[2]) / 2, 0.032, CROSS_Z);
+  cross.receiveShadow = true;
+  group.add(along, cross);
+  world.geometries.push(along.geometry, cross.geometry);
+  world.group.add(group);
+  return group;
+}
+
+export function addLaneBlockades(world: WorldBuild, defs: DebrisDef[]): DebrisRig[] {
+  const barrier = new THREE.MeshStandardMaterial({
+    color: 0xc4b08a,
+    roughness: 0.84,
+    metalness: 0.05,
+  });
+  const stripe = new THREE.MeshStandardMaterial({
+    color: 0xd4552a,
+    roughness: 0.6,
+    metalness: 0.04,
+  });
+  world.materials.push(barrier, stripe);
+  const box = new THREE.BoxGeometry(1, 1, 1);
+  world.geometries.push(box);
+  const rigs: DebrisRig[] = [];
+  for (const def of defs) {
+    const g = new THREE.Group();
+    g.position.set(def.x, 0, def.z);
+    g.rotation.y = def.yaw;
+    g.userData.debrisId = def.id;
+    const body = new THREE.Mesh(box, barrier);
+    body.position.set(0, 0.48, 0);
+    body.scale.set(3.3, 0.9, 2.4);
+    body.castShadow = true;
+    body.receiveShadow = true;
+    body.userData.debrisId = def.id;
+    const band = new THREE.Mesh(box, stripe);
+    band.position.set(0, 0.72, 0);
+    band.scale.set(3.36, 0.12, 2.46);
+    band.userData.debrisId = def.id;
+    g.add(body, band);
+    world.group.add(g);
+    const rig: DebrisRig = { id: def.id, def, group: g, mats: [] };
+    world.debris.push(rig);
+    rigs.push(rig);
+  }
+  return rigs;
+}
+
+export function applySignalLights(signals: SignalHead[], ns: "g" | "y" | "r", ew: "g" | "y" | "r") {
   for (const s of signals) {
     const lit = s.approach === "NS" ? ns : ew;
     s.red.emissiveIntensity = lit === "r" ? 1.6 : 0.12;
@@ -583,7 +632,18 @@ function spawnDebris(
     g.rotation.y = def.yaw;
     g.userData.debrisId = def.id;
     const local: THREE.MeshStandardMaterial[] = [];
-    const add = (geo: THREE.BufferGeometry, mat: THREE.MeshStandardMaterial, x: number, y: number, z: number, sx = 1, sy = 1, sz = 1, rx = 0, rz = 0) => {
+    const add = (
+      geo: THREE.BufferGeometry,
+      mat: THREE.MeshStandardMaterial,
+      x: number,
+      y: number,
+      z: number,
+      sx = 1,
+      sy = 1,
+      sz = 1,
+      rx = 0,
+      rz = 0,
+    ) => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(x, y, z);
       m.scale.set(sx, sy, sz);

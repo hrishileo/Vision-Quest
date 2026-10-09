@@ -39,7 +39,7 @@ export type Approach = "NS" | "EW";
 
 export type LaneDef = {
   id: string;
-  road: "mich" | "chi";
+  road: "mich" | "chi" | "rush" | "conn";
   approach: Approach;
   /** Constant axis value (x for Michigan, z for Chicago). */
   offset: number;
@@ -52,6 +52,12 @@ export type LaneDef = {
   heading: number;
   stopS: number;
   inner: boolean;
+  /** Open segment. s stays in [0, length]; the lead car has no wrap-around leader. */
+  finite?: boolean;
+  /** When false, signals do not hold this lane. Omitted lanes keep the intersection lights. */
+  signal?: boolean;
+  /** Cap on desired speed, m/s. */
+  vMax?: number;
 };
 
 function michLane(id: string, x: number, nb: boolean, inner: boolean): LaneDef {
@@ -101,12 +107,104 @@ export const LANES: LaneDef[] = [
   chiLane("chi-wb-1", CHI_WB[1], false, false),
 ];
 
-export const LANE_BY_ID: Record<string, LaneDef> = Object.fromEntries(
-  LANES.map((l) => [l.id, l]),
+export const LANE_BY_ID: Record<string, LaneDef> = Object.fromEntries(LANES.map((l) => [l.id, l]));
+
+/**
+ * Rush Street, the one parallel detour added east of the lots.
+ * The excerpt only had Michigan and Chicago, which do not close a block.
+ * Building faces reach about x = 55. Lane 0 is the inner (west) lane.
+ * `conn-wb-0` returns to Michigan at the north end of the block. The south
+ * end uses the existing Chicago Avenue lane `chi-eb-0`. Wabash is not added.
+ * The north return sits between the pumping station (z ≥ −33) and Water Tower Place (z ≤ −42).
+ */
+export const RUSH_X = [60.8, 64.4] as const;
+export const CROSS_Z = -36.5;
+
+function rushLane(id: string, x: number, inner: boolean): LaneDef {
+  const length = CHI_EB[0] - CROSS_Z;
+  return {
+    id,
+    road: "rush",
+    approach: "NS",
+    offset: x,
+    s0: CHI_EB[0],
+    sign: -1,
+    axis: "z",
+    length,
+    heading: Math.PI,
+    stopS: length,
+    inner,
+    finite: true,
+    signal: false,
+    vMax: 6.5,
+  };
+}
+
+function connWest(id: string, z: number, x0: number, x1: number): LaneDef {
+  const length = x0 - x1;
+  return {
+    id,
+    road: "conn",
+    approach: "EW",
+    offset: z,
+    s0: x0,
+    sign: -1,
+    axis: "x",
+    length,
+    heading: -Math.PI / 2,
+    stopS: length,
+    inner: true,
+    finite: true,
+    signal: false,
+    vMax: 6.5,
+  };
+}
+
+export const DETOUR_LANES: LaneDef[] = [
+  rushLane("rush-nb-0", RUSH_X[0], true),
+  rushLane("rush-nb-1", RUSH_X[1], false),
+  connWest("conn-wb-0", CROSS_Z, RUSH_X[0], MICH_NB[2]),
+];
+
+const DETOUR_LANE_BY_ID: Record<string, LaneDef> = Object.fromEntries(
+  DETOUR_LANES.map((l) => [l.id, l]),
 );
 
+export function laneById(id: string): LaneDef | undefined {
+  return LANE_BY_ID[id] ?? DETOUR_LANE_BY_ID[id];
+}
+
+const ALL_LANES: LaneDef[] = [...LANES, ...DETOUR_LANES];
+
+/**
+ * Travel lane whose centerline is within half a lane width of (x, z).
+ * Null on the sidewalk, shoulder, or parking strip. Ties prefer the lane
+ * whose station is farther from either end of that segment.
+ */
+export function laneIdAt(x: number, z: number): string | null {
+  const half = LANE_W * 0.5;
+  let best: { id: string; lateral: number; margin: number } | null = null;
+  for (const lane of ALL_LANES) {
+    const lateral = lane.axis === "z" ? Math.abs(x - lane.offset) : Math.abs(z - lane.offset);
+    if (lateral > half + 1e-6) continue;
+    const along = lane.axis === "z" ? lane.sign * (z - lane.s0) : lane.sign * (x - lane.s0);
+    if (along < -1e-4 || along > lane.length + 1e-4) continue;
+    const margin = Math.min(along, lane.length - along);
+    if (
+      !best ||
+      lateral < best.lateral - 1e-9 ||
+      (Math.abs(lateral - best.lateral) <= 1e-9 && margin > best.margin)
+    ) {
+      best = { id: lane.id, lateral, margin };
+    }
+  }
+  return best?.id ?? null;
+}
+
 export function lanePose(lane: LaneDef, s: number): { x: number; z: number; yaw: number } {
-  const t = ((s % lane.length) + lane.length) % lane.length;
+  let t: number;
+  if (lane.finite) t = Math.max(0, Math.min(s, lane.length));
+  else t = ((s % lane.length) + lane.length) % lane.length;
   if (lane.axis === "z") {
     return { x: lane.offset, z: lane.s0 + lane.sign * t, yaw: lane.heading };
   }
@@ -134,15 +232,69 @@ export type BuildingFoot = {
 
 /** Quadrant lots — AABB never overlaps Michigan |x|<11.2 or Chicago |z|<8.6. */
 export const BUILDINGS: BuildingFoot[] = [
-  { x: -26, z: -26, sx: 14, sz: 14, h: 28, name: "Chicago Water Tower", tone: 0xb7ae9c, kind: "castle" },
+  {
+    x: -26,
+    z: -26,
+    sx: 14,
+    sz: 14,
+    h: 28,
+    name: "Chicago Water Tower",
+    tone: 0xb7ae9c,
+    kind: "castle",
+  },
   { x: -32, z: -54, sx: 22, sz: 18, h: 42, name: "900 N Michigan", tone: 0x4a4540, kind: "block" },
   { x: -28, z: -72, sx: 18, sz: 12, h: 32, name: "Pearson west", tone: 0x3c4038, kind: "block" },
-  { x: -44, z: -22, sx: 16, sz: 16, h: 38, name: "River North loft", tone: 0x4a423c, kind: "block" },
-  { x: 28, z: -26, sx: 16, sz: 14, h: 16, name: "Chicago Ave Pumping Station", tone: 0xa89f8c, kind: "block" },
-  { x: 38, z: -52, sx: 28, sz: 20, h: 78, name: "Water Tower Place", tone: 0x3a424c, kind: "tower" },
+  {
+    x: -44,
+    z: -22,
+    sx: 16,
+    sz: 16,
+    h: 38,
+    name: "River North loft",
+    tone: 0x4a423c,
+    kind: "block",
+  },
+  {
+    x: 28,
+    z: -26,
+    sx: 16,
+    sz: 14,
+    h: 16,
+    name: "Chicago Ave Pumping Station",
+    tone: 0xa89f8c,
+    kind: "block",
+  },
+  {
+    x: 38,
+    z: -52,
+    sx: 28,
+    sz: 20,
+    h: 78,
+    name: "Water Tower Place",
+    tone: 0x3a424c,
+    kind: "tower",
+  },
   { x: 28, z: -70, sx: 18, sz: 12, h: 24, name: "Pearson east", tone: 0x585048, kind: "retail" },
-  { x: 46, z: -22, sx: 16, sz: 16, h: 48, name: "Streeterville tower", tone: 0x2a3038, kind: "glass" },
-  { x: -34, z: 34, sx: 26, sz: 20, h: 64, name: "The Peninsula Chicago", tone: 0x2c343c, kind: "glass" },
+  {
+    x: 46,
+    z: -22,
+    sx: 16,
+    sz: 16,
+    h: 48,
+    name: "Streeterville tower",
+    tone: 0x2a3038,
+    kind: "glass",
+  },
+  {
+    x: -34,
+    z: 34,
+    sx: 26,
+    sz: 20,
+    h: 64,
+    name: "The Peninsula Chicago",
+    tone: 0x2c343c,
+    kind: "glass",
+  },
   { x: -36, z: 58, sx: 20, sz: 14, h: 22, name: "Saks Men", tone: 0x5c5852, kind: "retail" },
   { x: -30, z: 72, sx: 20, sz: 12, h: 30, name: "Superior west", tone: 0x454038, kind: "block" },
   { x: -48, z: 16, sx: 14, sz: 12, h: 20, name: "SW walk-up", tone: 0x4c4844, kind: "retail" },

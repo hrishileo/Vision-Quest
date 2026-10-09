@@ -2,77 +2,92 @@
   "weights": "edge/detector/runs/cam0/weights/best.pt",
   "split": "test",
   "frames": 24,
-  "inference_ms_cpu": 25.789356999950996,
+  "inference_ms_cpu": 309.83611370841874,
   "metrics": {
-    "model": "yolov8n.pt",
+    "model": "/tmp/cam0-stage1.pt",
     "weights": "edge/detector/runs/cam0/weights/best.pt",
     "imgsz": 640,
-    "epochs": 40,
+    "epochs": 30,
     "device": "cpu",
     "split": "test",
-    "map50": 0.5737971847551029,
-    "map50_95": 0.3298997873345579,
+    "map50": 0.6433899322075189,
+    "map50_95": 0.4117217087794486,
     "per_class": [
       {
         "class": "vehicle",
         "id": 0,
-        "map50": 0.8443755251251954,
-        "map50_95": 0.5216019394829036,
-        "precision": 0.7062820367852137,
-        "recall": 0.8302623504469948
+        "map50": 0.8683767742315267,
+        "map50_95": 0.589836643699764,
+        "precision": 0.888373865695004,
+        "recall": 0.7768729641693811
       },
       {
         "class": "unknown",
         "id": 1,
-        "map50": 0.30321884438501023,
-        "map50_95": 0.1381976351862122,
-        "precision": 0.7095774250428822,
-        "recall": 0.22435897435897437
+        "map50": 0.4184030901835113,
+        "map50_95": 0.23360677385913325,
+        "precision": 0.8235867403658955,
+        "recall": 0.3890609326708915
       }
     ],
-    "debris_precision": 0.7095774250428822,
-    "debris_recall": 0.22435897435897437,
+    "debris_precision": 0.8235867403658955,
+    "debris_recall": 0.3890609326708915,
     "results": {
-      "metrics/precision(B)": 0.707929730914048,
-      "metrics/recall(B)": 0.5273106624029846,
-      "metrics/mAP50(B)": 0.5737971847551029,
-      "metrics/mAP50-95(B)": 0.3298997873345579,
-      "fitness": 0.3298997873345579
+      "metrics/precision(B)": 0.8559803030304498,
+      "metrics/recall(B)": 0.5829669484201363,
+      "metrics/mAP50(B)": 0.6433899322075189,
+      "metrics/mAP50-95(B)": 0.4117217087794486,
+      "fitness": 0.4117217087794486
+    }
+  },
+  "boxes_iou50": {
+    "unknown": {
+      "matched": 97,
+      "predicted": 173,
+      "truth": 156,
+      "precision": 0.5606936416184971,
+      "recall": 0.6217948717948718
+    },
+    "vehicle": {
+      "matched": 614,
+      "predicted": 996,
+      "truth": 614,
+      "precision": 0.6164658634538153,
+      "recall": 1.0
     }
   },
   "tailgate": {
     "gt_events": 27,
-    "det_events": 15,
-    "matched": 6,
-    "precision": 0.4,
-    "recall": 0.2222222222222222,
+    "det_events": 11,
+    "matched": 11,
+    "precision": 1.0,
+    "recall": 0.4074074074074074,
     "lanes_gt": [
       "mich-nb-1",
       "mich-sb-0",
       "mich-sb-2"
     ],
     "lanes_det": [
-      "chi-eb-0",
-      "chi-wb-0",
-      "mich-nb-1"
+      "mich-nb-1",
+      "mich-sb-0",
+      "mich-sb-2"
     ]
   },
   "lane_state": {
-    "compared": 185,
-    "agreement": 0.8594594594594595,
-    "gt_only": 5,
-    "det_only": 5,
+    "compared": 190,
+    "agreement": 0.9105263157894737,
+    "gt_only": 0,
+    "det_only": 11,
     "confusion": {
       "blocked->blocked": 2,
-      "blocked->clear": 1,
-      "blocked->slow": 12,
-      "clear->clear": 70,
-      "clear->unknown": 5,
-      "slow->clear": 4,
-      "slow->slow": 63,
-      "slow->unknown": 3,
+      "clear->clear": 79,
+      "clear->unknown": 1,
+      "slow->blocked": 8,
+      "slow->clear": 5,
+      "slow->slow": 70,
+      "unknown->clear": 2,
       "unknown->slow": 1,
-      "unknown->unknown": 24
+      "unknown->unknown": 22
     }
   },
   "annotated": "edge/detector/samples"

@@ -149,7 +149,9 @@ def run_detector_pipeline(
             block_classes=("unknown",),
         )
     if tailgate is None:
-        tailgate = TailgateDetector(settle_s=0.4, speed_band_mps=2.5, gap_s=0.45)
+        tailgate = TailgateDetector(
+            settle_s=0.4, speed_band_mps=6.0, gap_s=0.45, min_speed_mps=3.0
+        )
     events: list[EdgeEvent] = []
     per_frame: list[list[TrackedBox]] = []
     detections = 0

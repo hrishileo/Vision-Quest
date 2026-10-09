@@ -31,10 +31,14 @@ tracker:
 track_book:
   max_misses: 8
 tailgate:
+  # Speed must stay at or above min_speed_mps, and inside speed_band_mps,
+  # for settle_s. 3 m/s keeps a queued car whose projection creeps at 1–2 m/s
+  # from flagging. The wider band lets a distant southbound car through when
+  # its tracked speed chatters by a few metres per second.
   settle_s: 0.4
-  speed_band_mps: 2.5
+  speed_band_mps: 6.0
   gap_s: 0.45
-  min_speed_mps: 1.0
+  min_speed_mps: 3.0
   persist_s: 0.5
 lane:
   # Same closure as the closed loop: only debris publishes blocked.

@@ -179,8 +179,9 @@ def test_moving_pair_flags_tailgating_from_detections():
     for i in range(8):
         # Leader drifts north (negative image v is north? image down is south
         # for this nadir yaw-0 camera: +v is +south). Move both north together.
-        lead = DetBox("vehicle", 0.92, 310.0, 200.0 - i * 4.0, 20.0, 20.0)
-        follow = DetBox("vehicle", 0.88, 310.0, 250.0 - i * 4.0, 20.0, 20.0)
+        # 8 px / 0.2 s is about 4 m/s here, above the detector's 3 m/s floor.
+        lead = DetBox("vehicle", 0.92, 310.0, 200.0 - i * 8.0, 20.0, 20.0)
+        follow = DetBox("vehicle", 0.88, 310.0, 250.0 - i * 8.0, 20.0, 20.0)
         script.append([lead, follow])
     run = run_detector_pipeline(frames, [None] * len(frames), _Scripted(script))
     assert any(event.cls == "vehicle" for event in run.events)

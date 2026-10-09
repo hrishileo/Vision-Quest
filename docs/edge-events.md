@@ -290,13 +290,15 @@ overlapping tiles (`detect.tile_w` / `tile_h`) and merges them.
 
 Thresholds for the detector path live in that same file: ByteTrack's
 `match_px` and `max_misses` for distant cars, `unknown_high_conf` so a weak
-debris box can start a track, `tailgate.settle_s` so a queued car with a
-spiky tracked speed is not tailgating, and `lane.debris_fuse` so a debris
-hit plus slow traffic stays `blocked` after the box flickers. That path
-uses `block_classes: [unknown]`, the same closure as the closed loop, so a
-queued vehicle stays `slow` unless `vehicle_stall_hold_s` is set. The label
-path leaves `settle_s` at 0 and `debris_fuse` off, and still lets a stopped
-vehicle close a lane.
+debris box can start a track, `tailgate.min_speed_mps` (3 m/s) so a queued
+car whose tracked speed creeps at 1–2 m/s is not tailgating, and a wider
+`speed_band_mps` so a distant southbound car can still flag when that speed
+chatters. `lane.debris_fuse` keeps a lane `blocked` after a debris box
+flickers. That path uses `block_classes: [unknown]`, the same closure as
+the closed loop, so a queued vehicle stays `slow` unless
+`vehicle_stall_hold_s` is set. The label path leaves `settle_s` at 0 and
+`debris_fuse` off, and still lets a stopped vehicle close a lane. Compare
+scores lane state against that closed-loop closure.
 
 `data/yolo/` and the checkpoints are gitignored.
 `edge/detector/sample/` is a two-frame excerpt.

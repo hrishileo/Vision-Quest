@@ -183,7 +183,22 @@ def main() -> int:
         if missing:
             raise SystemExit(f"missing image {missing[0]}")
         gt_tail.extend(detect_tailgates(frames))
-        gt_lanes.extend(collect_lane_states(frames))
+        # Score lanes against the closed-loop contract (debris closes a lane;
+        # a stopped vehicle stays slow). The detector may also fuse a debris
+        # hit with a slowdown. The label pipeline below does not.
+        gt_lanes.extend(
+            collect_lane_states(
+                frames,
+                monitor=LaneMonitor(
+                    block_classes=tuple(lane_cfg.get("block_classes", ["unknown"])),
+                    vehicle_stall_hold_s=(
+                        None
+                        if lane_cfg.get("vehicle_stall_hold_s") is None
+                        else float(lane_cfg["vehicle_stall_hold_s"])
+                    ),
+                ),
+            )
+        )
         if images:
             detector.detect(str(images[0]))
         batches = []

@@ -13,7 +13,7 @@ PYTHONPATH=edge/src python edge/detector/compare.py \
 python edge/detector/export.py --weights edge/detector/runs/cam0/weights/best.pt
 ```
 
-`train.py` fine-tunes `yolov8n.pt` on CPU (`edge/detector/config.yaml`). Swap `--model yolo11n.pt` for YOLO11n. Checkpoints, the corpus under `data/yolo/`, and ONNX files are gitignored. `sample/` is two committed frames.
+`train.py` fine-tunes `yolov8n.pt` on CPU at the image size in `edge/detector/config.yaml` (640, so debris boxes of a few dozen pixels survive the resize). Swap `--model yolo11n.pt` for YOLO11n. Checkpoints, the corpus under `data/yolo/`, and ONNX files are gitignored. `sample/` is two committed frames. `metrics.json` is the test-split score, `report.json` is the tailgate and lane-state comparison, and `samples/` holds annotated frames (green labels, orange detections).
 
 Export writes `best.onnx` beside the checkpoint. On the Jetson Orin Nano:
 

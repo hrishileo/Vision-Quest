@@ -1,8 +1,12 @@
 # Fine-tune a nano detector for the Jetson Orin Nano.
 # yolov8n.pt is the default. yolo11n.pt is the same script with model swapped.
 model: yolov8n.pt
-imgsz: 320
-epochs: 20
+# 640 keeps debris boxes (often ~16–40 px in the 960-wide frame) above the
+# stride. At 320 the unknown class never received a positive sample that
+# survived the resize, and the head never predicted it.
+imgsz: 640
+epochs: 40
+seed: 0
 batch: 8
 device: cpu
 workers: 2

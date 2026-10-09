@@ -16,7 +16,10 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
+CONFIG = Path(__file__).resolve().parent / "config.yaml"
 sys.path.insert(0, str(ROOT / "edge" / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -69,7 +72,9 @@ def main() -> int:
     parser.add_argument("--data", default=str(ROOT / "data/yolo"))
     parser.add_argument("--weights", default=str(ROOT / "edge/detector/runs/cam0/weights/best.pt"))
     parser.add_argument("--split", default="test")
-    parser.add_argument("--imgsz", type=int, default=320)
+    with CONFIG.open(encoding="utf-8") as handle:
+        cfg = yaml.safe_load(handle)
+    parser.add_argument("--imgsz", type=int, default=int(cfg["imgsz"]))
     parser.add_argument("--output", default=str(ROOT / "edge/detector/report.json"))
     parser.add_argument("--annotated", default=str(ROOT / "edge/detector/samples"))
     args = parser.parse_args()
@@ -89,7 +94,9 @@ def main() -> int:
     saved = 0
     for seq_dir in sequences(data, args.split):
         frames = read_jsonl(seq_dir / "labels.jsonl")
-        images = [seq_dir / "images" / frame.file.split("/")[-1] for frame in frames]
+        images = sorted((seq_dir / "images").glob("*.png"))
+        if len(images) != len(frames):
+            raise SystemExit(f"{seq_dir.name}: {len(images)} images and {len(frames)} label frames")
         missing = [path for path in images if not path.is_file()]
         if missing:
             raise SystemExit(f"missing image {missing[0]}")
@@ -105,29 +112,39 @@ def main() -> int:
         detected = run_detector_pipeline(frames, [None] * len(frames), _Replay(batches))
         det_tail.extend(detected.tailgates)
         det_lanes.extend(detected.lane_states)
-        if saved < 4 and frames:
-            mid = len(frames) // 2
-            draw(
-                images[mid],
-                frames[mid],
-                detected.per_frame[mid],
-                annotated / f"{seq_dir.name}_{mid:06d}.png",
-            )
-            saved += 1
+        if frames:
+            for mid in (max(0, len(frames) // 3), len(frames) // 2):
+                if saved >= 4:
+                    break
+                draw(
+                    images[mid],
+                    frames[mid],
+                    detected.per_frame[mid],
+                    annotated / f"{seq_dir.name}_{mid:06d}.png",
+                )
+                saved += 1
         print(f"{seq_dir.name}: detections replayed on {len(frames)} frames")
 
     metrics_path = Path(__file__).resolve().parent / "metrics.json"
     metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.is_file() else None
     mean_ms = sum(infer_ms) / len(infer_ms) if infer_ms else 0.0
+
+    def _rel(path: Path) -> str:
+        resolved = path.resolve()
+        try:
+            return str(resolved.relative_to(ROOT))
+        except ValueError:
+            return str(resolved)
+
     report = {
-        "weights": str(weights),
+        "weights": _rel(weights),
         "split": args.split,
         "frames": len(infer_ms),
         "inference_ms_cpu": mean_ms,
         "metrics": metrics,
         "tailgate": compare_tailgates(gt_tail, det_tail),
         "lane_state": compare_lane_states(gt_lanes, det_lanes),
-        "annotated": str(annotated),
+        "annotated": _rel(annotated),
     }
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)

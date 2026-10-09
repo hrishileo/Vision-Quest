@@ -281,8 +281,11 @@ PYTHONPATH=edge/src python edge/detector/compare.py \
 python edge/detector/export.py --weights edge/detector/runs/cam0/weights/best.pt
 ```
 
-The corpus is split by sequence, not by frame. `data/yolo/` and the
-checkpoints are gitignored. `edge/detector/sample/` is a two-frame excerpt.
+The corpus is split by sequence, not by frame. Training image size is
+`imgsz` in `edge/detector/config.yaml` (640). Debris boxes are often only a
+few dozen pixels in the 960-wide frame, and a 320 input drops them under the
+stride. `data/yolo/` and the checkpoints are gitignored.
+`edge/detector/sample/` is a two-frame excerpt.
 Export writes ONNX next to the checkpoint. The Orin Nano engine is:
 
 ```bash

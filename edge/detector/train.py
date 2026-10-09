@@ -20,6 +20,16 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIG = Path(__file__).resolve().parent / "config.yaml"
 
 
+def _scalar_results(results) -> dict:
+    out = {}
+    for key, value in dict(results or {}).items():
+        try:
+            out[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def load_config() -> dict:
     with CONFIG.open(encoding="utf-8") as handle:
         data = yaml.safe_load(handle)
@@ -28,21 +38,33 @@ def load_config() -> dict:
     return data
 
 
+def _as_list(value) -> list:
+    """Ultralytics returns per-class arrays. Do not truth-test them."""
+    if value is None:
+        return []
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    return list(value)
+
+
 def class_rows(metrics) -> list[dict]:
     names = getattr(metrics, "names", {}) or {}
     box = metrics.box
+    # Rows follow ap_class_index, which is not necessarily 0..nc-1.
+    class_ids = _as_list(getattr(box, "ap_class_index", []))
+    ap50 = _as_list(getattr(box, "ap50", []))
+    ap = _as_list(getattr(box, "ap", []))
+    precision = _as_list(getattr(box, "p", []))
+    recall = _as_list(getattr(box, "r", []))
     rows = []
-    ap50 = list(getattr(box, "ap50", []) or [])
-    ap = list(getattr(box, "ap", []) or [])
-    precision = list(getattr(box, "p", []) or [])
-    recall = list(getattr(box, "r", []) or [])
-    for index, ap50_i in enumerate(ap50):
-        name = names.get(index, str(index))
+    for index in range(max(len(class_ids), len(ap50))):
+        class_id = int(class_ids[index]) if index < len(class_ids) else index
+        name = names.get(class_id, names.get(str(class_id), str(class_id)))
         rows.append(
             {
                 "class": name,
-                "id": index,
-                "map50": float(ap50_i),
+                "id": class_id,
+                "map50": float(ap50[index]) if index < len(ap50) else None,
                 "map50_95": float(ap[index]) if index < len(ap) else None,
                 "precision": float(precision[index]) if index < len(precision) else None,
                 "recall": float(recall[index]) if index < len(recall) else None,
@@ -69,6 +91,7 @@ def main() -> int:
     batch = args.batch if args.batch is not None else int(cfg["batch"])
     device = args.device or str(cfg["device"])
     workers = int(cfg.get("workers", 2))
+    seed = int(cfg.get("seed", 0))
 
     from ultralytics import YOLO
 
@@ -85,7 +108,8 @@ def main() -> int:
         name=args.name,
         exist_ok=True,
         pretrained=True,
-        patience=10,
+        patience=20,
+        seed=seed,
         plots=False,
         verbose=True,
     )
@@ -115,7 +139,7 @@ def main() -> int:
         "per_class": rows,
         "debris_precision": None if debris is None else debris["precision"],
         "debris_recall": None if debris is None else debris["recall"],
-        "results": {key: float(value) for key, value in dict(getattr(metrics, "results_dict", {})).items()},
+        "results": _scalar_results(getattr(metrics, "results_dict", {})),
     }
     out = Path(__file__).resolve().parent / "metrics.json"
     out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

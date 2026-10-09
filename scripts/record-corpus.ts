@@ -146,7 +146,7 @@ function writeSequence(out: string, recorded: RecordedSequence, spec: SequenceSp
 function writeYaml(out: string) {
   const split = sequencesBySplit();
   const yaml = `# CAM0 ground truth. Classes match the recorder: 0 vehicle, 1 unknown (debris/blockade).
-path: .
+path: ${out}
 train: images/train
 val: images/val
 test: images/test

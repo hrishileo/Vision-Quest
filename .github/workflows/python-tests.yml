@@ -1,0 +1,21 @@
+name: Python tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install edge test dependencies
+        run: pip install -r edge/requirements-dev.txt
+      - name: Edge, hub, legacy, and occupancy tests
+        run: bash scripts/test-python.sh

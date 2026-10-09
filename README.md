@@ -25,7 +25,26 @@ React 19 · TanStack Start · Three.js · Zustand · Tailwind v4
 
 Geometry is procedural (no GLB). Studio lighting, bloom, and CSS2D labels run in the browser.
 
-Flight software lives in [hrishileo/HorizonVision](https://github.com/hrishileo/HorizonVision). This repo is the briefing, not the PX4 binary.
+The camera-only edge and the Mag Mile hub are in this repo. This app is the briefing, not the PX4 binary.
+
+## Edge and hub
+
+`edge/` is the Python edge package (`horizon_vision.events`, plus the LiDAR driver stubs that the event path does not call). `hub/` is the detour package (`horizon_vision.hub`: street graph, A*, JSONL alerts). `pytest.ini` puts `edge/src` and `hub/src` on the path. Tests read the CAM0 sample at `src/lib/guide/__fixtures__/cam0-sample.labels.jsonl` instead of keeping a second copy.
+
+```bash
+pip install -r edge/requirements-dev.txt
+python -m pytest
+```
+
+`npm run test:python` runs that suite, the parked LiDAR tests under `edge/legacy/`, and the occupancy-grid check. Contract and commands: `docs/edge-events.md`.
+
+```bash
+PYTHONPATH=edge/src:hub/src python -m horizon_vision.hub \
+  --output /tmp/debris_alerts.jsonl \
+  --summary /tmp/debris_summary.txt
+```
+
+`edge/legacy/` holds unmerged HorizonVision work (time sync and ingest, the LiDAR cluster detector, BEV metrics, the occupancy grid). It is not imported by the edge or the hub. See `edge/legacy/README.md`.
 
 ## Run
 

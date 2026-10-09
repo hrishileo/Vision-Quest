@@ -1,0 +1,37 @@
+{
+  "model": "/tmp/cam0-stage1.pt",
+  "weights": "edge/detector/runs/cam0/weights/best.pt",
+  "imgsz": 640,
+  "epochs": 30,
+  "device": "cpu",
+  "split": "test",
+  "map50": 0.6433899322075189,
+  "map50_95": 0.4117217087794486,
+  "per_class": [
+    {
+      "class": "vehicle",
+      "id": 0,
+      "map50": 0.8683767742315267,
+      "map50_95": 0.589836643699764,
+      "precision": 0.888373865695004,
+      "recall": 0.7768729641693811
+    },
+    {
+      "class": "unknown",
+      "id": 1,
+      "map50": 0.4184030901835113,
+      "map50_95": 0.23360677385913325,
+      "precision": 0.8235867403658955,
+      "recall": 0.3890609326708915
+    }
+  ],
+  "debris_precision": 0.8235867403658955,
+  "debris_recall": 0.3890609326708915,
+  "results": {
+    "metrics/precision(B)": 0.8559803030304498,
+    "metrics/recall(B)": 0.5829669484201363,
+    "metrics/mAP50(B)": 0.6433899322075189,
+    "metrics/mAP50-95(B)": 0.4117217087794486,
+    "fitness": 0.4117217087794486
+  }
+}

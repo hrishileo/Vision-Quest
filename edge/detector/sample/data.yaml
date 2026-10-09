@@ -1,0 +1,6 @@
+path: .
+train: images
+val: images
+names:
+  0: vehicle
+  1: unknown

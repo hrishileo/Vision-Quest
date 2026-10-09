@@ -190,6 +190,75 @@ def test_one_confident_sample_does_not_block():
     assert event.state != "blocked"
 
 
+def test_debris_hit_plus_slowdown_holds_blocked_after_the_box_drops():
+    monitor = LaneMonitor(
+        hold_s=1.5,
+        min_confidence=0.2,
+        slow_mps=4.0,
+        stationary_mps=0.5,
+        debris_fuse=True,
+        debris_hold_s=1.0,
+        blocked_hold_s=1.0,
+    )
+    slow = lambda t: _track(track_id="veh-1", speed=2.2, t=t, x=0.4 * t)
+    debris = _track(track_id="deb-1", cls="unknown", speed=0.0, t=0.0, confidence=0.6)
+    # The debris has not sat still for hold_s. The slow vehicles plus that
+    # one hit are enough, and the lane stays blocked after the box is gone.
+    assert _at(monitor, 0.0, [slow(0.0), debris])["mich-nb-1"].state == "blocked"
+    assert _at(monitor, 0.5, [slow(0.5)])["mich-nb-1"].state == "blocked"
+    assert _at(monitor, 2.2, [slow(2.2)])["mich-nb-1"].state == "slow"
+
+
+def test_fuse_does_not_let_a_vehicle_stall_skip_the_closed_loop_rule():
+    monitor = LaneMonitor(
+        block_classes=("unknown",),
+        hold_s=1.5,
+        vehicle_stall_hold_s=10.0,
+        max_gap_s=0.5,
+        min_confidence=0.2,
+        debris_fuse=True,
+        debris_hold_s=1.0,
+        blocked_hold_s=1.0,
+    )
+    stall = lambda t: _track(speed=0.0, t=t, confidence=0.9)
+    saw_slow = False
+    last = None
+    for step in range(0, 21):
+        t = step * 0.5
+        last = _at(monitor, t, [stall(t)])["mich-nb-1"].state
+        if t == 2.0:
+            saw_slow = last == "slow"
+    assert saw_slow
+    assert last == "blocked"
+
+    fused = LaneMonitor(
+        block_classes=("unknown",),
+        hold_s=1.5,
+        min_confidence=0.2,
+        debris_fuse=True,
+        debris_hold_s=1.0,
+        blocked_hold_s=1.0,
+    )
+    slow = lambda t: _track(track_id="veh-1", speed=2.0, t=t, x=0.2 * t)
+    debris = _track(track_id="deb-1", cls="unknown", speed=0.0, t=0.0, confidence=0.6)
+    assert _at(fused, 0.0, [slow(0.0)])["mich-nb-1"].state == "slow"
+    assert _at(fused, 0.5, [slow(0.5), debris])["mich-nb-1"].state == "blocked"
+    assert _at(fused, 1.0, [slow(1.0)])["mich-nb-1"].state == "blocked"
+
+
+def test_slow_traffic_without_debris_stays_slow_when_fuse_is_on():
+    monitor = LaneMonitor(
+        hold_s=1.5,
+        min_confidence=0.2,
+        debris_fuse=True,
+        debris_hold_s=2.0,
+        blocked_hold_s=2.0,
+    )
+    crawling = lambda t: _track(speed=2.0, t=t, x=0.5 * t)
+    assert _at(monitor, 0.0, [crawling(0.0)])["mich-nb-1"].state == "slow"
+    assert _at(monitor, 2.0, [crawling(2.0)])["mich-nb-1"].state == "slow"
+
+
 def test_slow_lane_from_track_speeds():
     monitor = _monitor()
     crawling = lambda t: _track(speed=2.0, t=t, x=2.0 * t)

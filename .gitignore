@@ -25,3 +25,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# Detector corpus and checkpoints. Scripts, config, and edge/detector/sample stay.
+data/yolo/
+edge/detector/runs/
+*.pt
+*.onnx
+*.engine

@@ -259,3 +259,51 @@ That CAM0 sample already contains close following under 2 s, including
 `veh-13` behind `veh-12` in `mich-sb-0`. The edge cases (open gap, stopped
 traffic, a shorter threshold, a one-frame blip, a lane change) are unit
 tests, not a second label file.
+
+## Detector
+
+The label path above is the scoring baseline. `horizon_vision.events.detect`
+runs the same tracker, lane-state monitor, and tailgate detector from image
+boxes. Pose still comes from the camera. A ByteTrack-style associator
+(`horizon_vision.events.associate`) assigns `trk-<n>` ids. The box's
+bottom-center ray hits the ground, and `lane_id_at` supplies the lane the
+label used to carry. Confidence is the lower of the ray confidence and the
+detector score.
+
+Train and compare:
+
+```bash
+node --experimental-strip-types scripts/record-corpus.ts --out data/yolo
+pip install -r edge/detector/requirements.txt
+python edge/detector/train.py --data data/yolo/data.yaml
+PYTHONPATH=edge/src python edge/detector/compare.py \
+  --data data/yolo --weights edge/detector/runs/cam0/weights/best.pt
+python edge/detector/export.py --weights edge/detector/runs/cam0/weights/best.pt
+```
+
+The corpus is split by sequence, not by frame. Close passes
+(`s12`–`s16`) put the drone a few metres over a cluster of debris kinds so
+those boxes are large. `edge/detector/balance.py` then writes a crop around
+the debris in each train frame. Training image size is `imgsz` in
+`edge/detector/config.yaml` (640). At inference the detector also runs
+overlapping tiles (`detect.tile_w` / `tile_h`) and merges them.
+
+Thresholds for the detector path live in that same file: ByteTrack's
+`match_px` and `max_misses` for distant cars, `unknown_high_conf` so a weak
+debris box can start a track, `tailgate.min_speed_mps` (3 m/s) so a queued
+car whose tracked speed creeps at 1–2 m/s is not tailgating, and a wider
+`speed_band_mps` so a distant southbound car can still flag when that speed
+chatters. `lane.debris_fuse` keeps a lane `blocked` after a debris box
+flickers. That path uses `block_classes: [unknown]`, the same closure as
+the closed loop, so a queued vehicle stays `slow` unless
+`vehicle_stall_hold_s` is set. The label path leaves `settle_s` at 0 and
+`debris_fuse` off, and still lets a stopped vehicle close a lane. Compare
+scores lane state against that closed-loop closure.
+
+`data/yolo/` and the checkpoints are gitignored.
+`edge/detector/sample/` is a two-frame excerpt.
+Export writes ONNX next to the checkpoint. The Orin Nano engine is:
+
+```bash
+/usr/src/tensorrt/bin/trtexec --onnx=best.onnx --saveEngine=best.fp16.engine --fp16
+```

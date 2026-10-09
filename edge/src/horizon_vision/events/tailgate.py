@@ -80,6 +80,9 @@ class VehicleState:
     y: float
     speed: float
     length: float = MAG_MILE_CAR_LENGTH_M
+    # Set when position and speed came from a detector track.
+    # None keeps TailgateDetector.confidence (1 for ground-truth labels).
+    confidence: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +93,7 @@ class _Pair:
     headway_s: float
     gap_m: float
     follower_speed: float
+    confidence: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,7 +238,19 @@ class TailgateDetector:
     min_speed_mps: float = 1.0
     vehicle_length_m: float = MAG_MILE_CAR_LENGTH_M
     confidence: float = 1.0
+    # Speed must stay inside ``speed_band_mps`` and at or above ``min_speed_mps``
+    # for ``settle_s`` before a pair can start. 0 keeps the label path, which
+    # already has a true speed. The detector path sets this so a queued car
+    # whose tracked speed spikes for one frame is not tailgating.
+    settle_s: float = 0.0
+    speed_band_mps: float = 2.5
+    # Keep a pair's timer across a dropout no longer than this. 0 clears it
+    # on the first missed frame. The detector path uses it when a distant
+    # box skips a frame without changing id.
+    gap_s: float = 0.0
     _streaks: dict[tuple[str, str, str], float] = field(default_factory=dict)
+    _seen: dict[tuple[str, str, str], float] = field(default_factory=dict)
+    _speeds: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
     _last_t: float | None = None
 
     def __post_init__(self) -> None:
@@ -248,6 +264,12 @@ class TailgateDetector:
             raise ValueError("vehicle_length_m must be positive")
         if not math.isfinite(self.confidence) or not 0 <= self.confidence <= 1:
             raise ValueError("confidence must be in [0, 1]")
+        if not math.isfinite(self.settle_s) or self.settle_s < 0:
+            raise ValueError("settle_s must be >= 0")
+        if not math.isfinite(self.speed_band_mps) or self.speed_band_mps < 0:
+            raise ValueError("speed_band_mps must be >= 0")
+        if not math.isfinite(self.gap_s) or self.gap_s < 0:
+            raise ValueError("gap_s must be >= 0")
 
     def update(self, t: float, vehicles: list[VehicleState]) -> list[TailgateEvent]:
         if not math.isfinite(t):
@@ -257,12 +279,16 @@ class TailgateDetector:
         if self._last_t is not None and t == self._last_t:
             return []
 
-        active = self._violations(vehicles)
+        for vehicle in vehicles:
+            self._note_speed(vehicle, t)
+        active = self._violations(vehicles, t)
         kept: dict[tuple[str, str, str], float] = {}
+        seen: dict[tuple[str, str, str], float] = {}
         events: list[TailgateEvent] = []
         for key, pair in active.items():
             start = self._streaks.get(key, t)
             kept[key] = start
+            seen[key] = t
             if t - start + 1e-9 >= self.persist_s:
                 events.append(
                     TailgateEvent(
@@ -272,16 +298,25 @@ class TailgateDetector:
                         headway_s=pair.headway_s,
                         gap_m=pair.gap_m,
                         follower_speed=pair.follower_speed,
-                        confidence=self.confidence,
+                        confidence=pair.confidence,
                         t=t,
                     )
                 )
+        if self.gap_s > 0:
+            for key, start in self._streaks.items():
+                if key in kept:
+                    continue
+                last = self._seen.get(key, start)
+                if t - last <= self.gap_s:
+                    kept[key] = start
+                    seen[key] = last
         self._streaks = kept
+        self._seen = seen
         self._last_t = t
         events.sort(key=lambda event: (event.lane, event.follower_track_id, event.leader_track_id))
         return events
 
-    def _violations(self, vehicles: list[VehicleState]) -> dict[tuple[str, str, str], _Pair]:
+    def _violations(self, vehicles: list[VehicleState], t: float) -> dict[tuple[str, str, str], _Pair]:
         by_id: dict[str, VehicleState] = {}
         for vehicle in vehicles:
             _check_vehicle(vehicle)
@@ -304,14 +339,42 @@ class TailgateDetector:
             axis, sign = travel
             ordered = sorted(group, key=lambda vehicle: (-_along(vehicle, axis, sign), vehicle.track_id))
             for leader, follower in zip(ordered, ordered[1:]):
-                pair = self._pair(leader, follower, axis, sign)
+                pair = self._pair(leader, follower, axis, sign, t)
                 if pair is None:
                     continue
                 found[(pair.follower_track_id, pair.leader_track_id, pair.lane)] = pair
         return found
 
-    def _pair(self, leader: VehicleState, follower: VehicleState, axis: str, sign: float) -> _Pair | None:
+    def _note_speed(self, vehicle: VehicleState, t: float) -> None:
+        hist = self._speeds.setdefault(vehicle.track_id, [])
+        hist.append((t, vehicle.speed))
+        if self.settle_s <= 0:
+            del hist[:-1]
+            return
+        cutoff = t - self.settle_s
+        while len(hist) > 1 and hist[0][0] < cutoff - 1e-9:
+            hist.pop(0)
+
+    def _speed_settled(self, vehicle: VehicleState, t: float) -> bool:
+        if self.settle_s <= 0:
+            return True
+        hist = self._speeds.get(vehicle.track_id, [])
+        if not hist or t - hist[0][0] + 1e-9 < self.settle_s:
+            return False
+        speeds = [speed for _t, speed in hist]
+        return min(speeds) >= self.min_speed_mps and max(speeds) - min(speeds) <= self.speed_band_mps
+
+    def _pair(
+        self,
+        leader: VehicleState,
+        follower: VehicleState,
+        axis: str,
+        sign: float,
+        t: float,
+    ) -> _Pair | None:
         if follower.speed <= 0 or follower.speed < self.min_speed_mps:
+            return None
+        if not self._speed_settled(follower, t):
             return None
         lane = follower.lane
         if lane is None:
@@ -323,6 +386,9 @@ class TailgateDetector:
         headway = gap / follower.speed
         if headway >= self.threshold_s:
             return None
+        confidence = self.confidence
+        if leader.confidence is not None and follower.confidence is not None:
+            confidence = min(leader.confidence, follower.confidence)
         return _Pair(
             follower_track_id=follower.track_id,
             leader_track_id=leader.track_id,
@@ -330,6 +396,7 @@ class TailgateDetector:
             headway_s=headway,
             gap_m=gap,
             follower_speed=follower.speed,
+            confidence=confidence,
         )
 
 
@@ -345,6 +412,8 @@ def _check_vehicle(vehicle: VehicleState) -> None:
         raise ValueError("speed must be >= 0")
     if vehicle.length <= 0:
         raise ValueError("length must be positive")
+    if vehicle.confidence is not None and not 0 <= vehicle.confidence <= 1:
+        raise ValueError("confidence must be in [0, 1]")
 
 
 def vehicles_from_frame(frame: FrameLabels, length_m: float = MAG_MILE_CAR_LENGTH_M) -> list[VehicleState]:

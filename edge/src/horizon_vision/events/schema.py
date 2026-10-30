@@ -14,7 +14,10 @@ import math
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-CLASSES = ("vehicle", "unknown")
+CLASSES = ("vehicle", "person", "bicycle", "motor", "unknown")
+# Classes that can occupy a lane for lane speed and blocking. Road users
+# such as people and bikes are published but never slow or close a lane.
+LANE_CLASSES = ("vehicle", "unknown")
 
 EDGE_EVENT_JSON_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

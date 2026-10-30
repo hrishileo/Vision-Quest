@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from horizon_vision.events.schema import CLASSES
+
 
 class LabelParseError(ValueError):
     """A label frame did not match the recorder schema this parser expects."""
@@ -150,6 +152,9 @@ def parse_frame(data: Mapping[str, Any]) -> FrameLabels:
     return FrameLabels(t=t, pose=pose, intrinsics=intrinsics, objects=objects)
 
 
+ROAD_USER_CLASSES = tuple(c for c in CLASSES if c != "unknown")
+
+
 def normalize_class(cls: str, kind: str | None) -> tuple[str, bool]:
     """Map a label class and kind onto the edge contract.
 
@@ -159,8 +164,8 @@ def normalize_class(cls: str, kind: str | None) -> tuple[str, bool]:
     """
     if kind in ("debris", "blockade") or cls == "unknown":
         return "unknown", True
-    if cls == "vehicle" and kind is None:
-        return "vehicle", False
+    if cls in ROAD_USER_CLASSES and kind is None:
+        return cls, False
     raise LabelParseError(
         f"unsupported class/kind pair class={cls!r} kind={kind!r}"
     )
@@ -245,8 +250,8 @@ def _parse_object(data: Any, corpus: bool = False) -> ObjectLabel:
         track_id = _track_id(obj.get("track_id", obj.get("trackId")))
         lane = obj.get("lane", obj.get("laneId", None))
     raw_class = obj.get("class")
-    if raw_class not in ("vehicle", "unknown"):
-        raise LabelParseError(f"object class must be 'vehicle' or 'unknown', got {raw_class!r}")
+    if raw_class not in CLASSES:
+        raise LabelParseError(f"object class must be one of {CLASSES}, got {raw_class!r}")
     kind = obj.get("kind", None)
     if kind not in (None, "debris", "blockade"):
         raise LabelParseError(f"kind must be debris, blockade, or null, got {kind!r}")

@@ -45,6 +45,42 @@ def _stops(length: int, tile: int, stride: int) -> list[int]:
     return stops
 
 
+def drop_seam_boxes(
+    boxes: list[DetBox],
+    window: tuple[int, int, int, int],
+    width: int,
+    height: int,
+    margin: float = 2.0,
+) -> list[DetBox]:
+    """Drop crop boxes that touch a cut the crop made inside the frame.
+
+    A box against an interior tile edge is the visible part of an object that
+    runs past the crop. Its IoU with the whole-object box is low, so NMS keeps
+    both and the fragment becomes a false box. With the full frame always run,
+    and tiles overlapping, the whole object is seen elsewhere: anything up to
+    the overlap fits inside a neighbouring tile, and anything larger is seen
+    by the full-frame pass. Edges on the frame border are real and kept.
+    ``boxes`` are in crop pixels; ``window`` is ``(x, y, w, h)`` in the frame.
+    """
+    x, y, w, h = window
+    cut_left = x > 0
+    cut_top = y > 0
+    cut_right = x + w < width
+    cut_bottom = y + h < height
+    kept: list[DetBox] = []
+    for box in boxes:
+        if cut_left and box.u <= margin:
+            continue
+        if cut_top and box.v <= margin:
+            continue
+        if cut_right and box.u + box.w >= w - margin:
+            continue
+        if cut_bottom and box.v + box.h >= h - margin:
+            continue
+        kept.append(box)
+    return kept
+
+
 def shift_boxes(boxes: list[DetBox], origin_u: float, origin_v: float) -> list[DetBox]:
     if origin_u == 0 and origin_v == 0:
         return list(boxes)

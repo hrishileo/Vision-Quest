@@ -11,8 +11,8 @@ Priority, first match:
 2. A track whose class is in ``block_classes`` (default ``vehicle`` and
    ``unknown``) has stayed in this lane, at or under ``stationary_mps``,
    and inside ``stationary_radius_m`` of where that dwell started, for at
-   least ``hold_s`` → ``blocked``. A class outside ``block_classes`` still
-   counts toward the mean speed, so a stall can be ``slow`` without closing
+   least ``hold_s`` → ``blocked``. A lane class (``vehicle`` or ``unknown``)
+   outside ``block_classes`` still counts toward the mean speed, so a stall can be ``slow`` without closing
    the lane. Setting ``vehicle_stall_hold_s`` (default off) also lets a
    stopped vehicle close the lane, but only after that longer dwell.
 3. Mean speed is below ``slow_mps`` → ``slow``.
@@ -24,6 +24,12 @@ is held for ``blocked_hold_s`` after the box drops. A vehicle stall does not
 take this shortcut: it still waits for ``vehicle_stall_hold_s`` when that
 flag is set, and it stays ``slow`` when the flag is off and ``vehicle`` is
 not in ``block_classes``.
+
+Only ``LANE_CLASSES`` (``vehicle`` and ``unknown``) are read. ``person``,
+``bicycle`` and ``motor`` events are dropped on entry: they never block a
+lane, never move its mean speed, and never refresh it. A lane where only
+people or bikes are seen gets no fresh state and turns ``unknown`` once its
+last vehicle or debris sample is older than ``stale_s``.
 
 A low-confidence sample does not start or extend a dwell. Changing lane,
 moving off the anchor, or a gap longer than ``max_gap_s`` starts it over.
@@ -44,7 +50,7 @@ from typing import Any, Mapping, Sequence
 
 from horizon_vision.events.labels import FrameLabels
 from horizon_vision.events.pipeline import run_label_pipeline
-from horizon_vision.events.schema import EdgeEvent
+from horizon_vision.events.schema import LANE_CLASSES, EdgeEvent
 from horizon_vision.events.tracking import TrackBook
 
 STATES = ("blocked", "slow", "clear", "unknown")
@@ -267,6 +273,9 @@ class LaneMonitor:
 
         latest: dict[str, EdgeEvent] = {}
         for event in tracks:
+            # People and bikes never feed lane speed or blocking.
+            if event.cls not in LANE_CLASSES:
+                continue
             latest[event.track_id] = event
 
         by_lane: dict[str, list[EdgeEvent]] = defaultdict(list)

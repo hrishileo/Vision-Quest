@@ -21,7 +21,7 @@ from horizon_vision.events.labels import FrameLabels
 from horizon_vision.events.lane_state import LaneMonitor, LaneStateEvent
 from horizon_vision.events.lanes import lane_id_at
 from horizon_vision.events.monocular import estimate_ground_point
-from horizon_vision.events.schema import EdgeEvent
+from horizon_vision.events.schema import CLASSES, EdgeEvent
 from horizon_vision.events.tailgate import (
     MAG_MILE_CAR_LENGTH_M,
     TailgateDetector,
@@ -30,7 +30,7 @@ from horizon_vision.events.tailgate import (
 )
 from horizon_vision.events.tracking import Observation, TrackBook
 
-CLASS_NAMES = ("vehicle", "unknown")
+CLASS_NAMES = CLASSES
 
 
 class BoxDetector(Protocol):

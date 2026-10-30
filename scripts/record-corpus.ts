@@ -17,8 +17,6 @@ import {
   classCounts,
   frameToYolo,
   framesToJsonl,
-  hasAgentLabels,
-  legacyFrame,
   validateFrame,
   type ClassCounts,
   type CorpusFrame,
@@ -156,11 +154,7 @@ function writeSequence(out: string, recorded: RecordedSequence, spec: SequenceSp
     writeFileSync(join(splitImages, `${flat}.png`), png);
     writeFileSync(join(splitLabels, `${flat}.txt`), yolo);
   });
-  // labels.jsonl stays on the two-class contract the edge reader accepts.
-  writeFileSync(join(root, "labels.jsonl"), framesToJsonl(recorded.frames.map(legacyFrame)));
-  if (hasAgentLabels(recorded.frames)) {
-    writeFileSync(join(root, "labels.all.jsonl"), framesToJsonl(recorded.frames));
-  }
+  writeFileSync(join(root, "labels.jsonl"), framesToJsonl(recorded.frames));
   writeFileSync(join(root, "meta.json"), JSON.stringify(spec, null, 2));
 }
 
@@ -199,8 +193,7 @@ function writeSample(sampleDir: string, recorded: RecordedSequence) {
     writeFileSync(join(sampleDir, "images", `${stem}.png`), Buffer.from(recorded.pngs[i] ?? "", "base64"));
     writeFileSync(join(sampleDir, "labels", `${stem}.txt`), frameToYolo(frame));
   });
-  writeFileSync(join(sampleDir, "labels.jsonl"), framesToJsonl(keep.map(legacyFrame)));
-  if (hasAgentLabels(keep)) writeFileSync(join(sampleDir, "labels.all.jsonl"), framesToJsonl(keep));
+  writeFileSync(join(sampleDir, "labels.jsonl"), framesToJsonl(keep));
   writeFileSync(join(sampleDir, "data.yaml"), DATA_YAML);
   const counts = keep.map((frame) => frame.objects.length);
   writeFileSync(

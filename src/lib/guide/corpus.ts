@@ -20,7 +20,6 @@ export const CORPUS_SCHEMA = 1;
 
 /** 0 and 1 keep their original meaning. New classes append so old YOLO txt files stay valid. */
 export const YOLO_CLASS_ID = { vehicle: 0, unknown: 1, person: 2, bicycle: 3, motor: 4 } as const;
-export const LEGACY_CLASSES: ReadonlySet<LabelClass> = new Set<LabelClass>(["vehicle", "unknown"]);
 const AGENT_TYPES: Record<string, AgentType[]> = {
   person: ["person"],
   bicycle: ["bicycle"],
@@ -303,15 +302,6 @@ export function agentRecord(
   };
 }
 
-/** The frame as the two-class schema-1 contract: vehicles and unknowns only. */
-export function legacyFrame(frame: CorpusFrame): CorpusFrame {
-  return { ...frame, objects: frame.objects.filter((obj) => LEGACY_CLASSES.has(obj.class)) };
-}
-
-export function hasAgentLabels(frames: readonly CorpusFrame[]): boolean {
-  return frames.some((frame) => frame.objects.some((obj) => !LEGACY_CLASSES.has(obj.class)));
-}
-
 export type ClassCounts = Record<LabelClass, number>;
 
 export function classCounts(frames: readonly CorpusFrame[]): ClassCounts {
@@ -550,8 +540,7 @@ These labels are **ground truth** from the Vision Quest Mag Mile pursuit sim (CA
 ## Layout
 
 - \`images/000000.png\` — CAM0 render, ${meta.width}×${meta.height}, PNG
-- \`labels.jsonl\` — one JSON object per frame, vehicles and unknowns only (the two-class contract)
-- \`labels.all.jsonl\` — same frames with every class, written only when a frame has a person, bicycle, or motor
+- \`labels.jsonl\` — one JSON object per frame, every class
 - \`labels/000000.txt\` — YOLO txt, same stem as the image
 - \`data.yaml\` — class ids for a YOLO trainer
 
@@ -679,12 +668,9 @@ export function corpusArchiveEntries(
         }),
       ),
     },
-    { name: `${root}labels.jsonl`, data: enc.encode(framesToJsonl(frames.map(legacyFrame))) },
+    { name: `${root}labels.jsonl`, data: enc.encode(framesToJsonl(frames)) },
     { name: `${root}data.yaml`, data: enc.encode(DATA_YAML) },
   ];
-  if (hasAgentLabels(frames)) {
-    entries.push({ name: `${root}labels.all.jsonl`, data: enc.encode(framesToJsonl(frames)) });
-  }
   frames.forEach((frame, i) => {
     const stem = frameStem(frame.index);
     const png = pngs[i];

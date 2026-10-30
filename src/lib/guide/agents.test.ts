@@ -16,9 +16,10 @@ import {
   assertRoadInView,
   cameraRecord,
   classCounts,
+  corpusArchiveEntries,
   debrisRecord,
   frameToYolo,
-  legacyFrame,
+  framesToJsonl,
   makeFrame,
   nadirCamera,
   roadView,
@@ -191,7 +192,7 @@ describe("pedestrians, bicycles, and motors", () => {
     }
   });
 
-  it("keeps vehicle and debris records on the two-class contract", () => {
+  it("keeps vehicle and debris records unchanged next to the new classes", () => {
     const camera = nadirCamera(0, 30, 0, Math.PI);
     const corners = [
       { x: -1, y: 0, z: -2 },
@@ -235,10 +236,21 @@ describe("pedestrians, bicycles, and motors", () => {
       objects: [car, deb, bike],
     });
     assert.deepEqual(validateFrame(frame), []);
+    const entries = corpusArchiveEntries("run", [frame], [Uint8Array.from([137, 80, 78, 71])]);
     assert.deepEqual(
-      legacyFrame(frame).objects.map((obj) => obj.class),
-      ["vehicle", "unknown"],
+      entries.map((entry) => entry.name),
+      [
+        "run/README.md",
+        "run/labels.jsonl",
+        "run/data.yaml",
+        "run/images/000000.png",
+        "run/labels/000000.txt",
+      ],
     );
+    const jsonl = new TextDecoder().decode(entries[1]!.data);
+    assert.equal(jsonl, framesToJsonl([frame]));
+    for (const cls of ["vehicle", "unknown", "motor"])
+      assert.ok(jsonl.includes(`"class":"${cls}"`), cls);
     const wrong = { ...frame, objects: [{ ...bike, type: "bicycle" }] };
     assert.ok(validateFrame(wrong).includes("type bicycle"));
   });

@@ -12,7 +12,15 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page } from "playwright";
-import { frameToYolo, framesToJsonl, validateFrame, type CorpusFrame } from "../src/lib/guide/corpus.ts";
+import {
+  DATA_YAML,
+  classCounts,
+  frameToYolo,
+  framesToJsonl,
+  validateFrame,
+  type ClassCounts,
+  type CorpusFrame,
+} from "../src/lib/guide/corpus.ts";
 import {
   SEQUENCES,
   sequencesBySplit,
@@ -60,13 +68,22 @@ function startDev(): Promise<{ url: string; stop: () => void }> {
       cwd: repoRoot,
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
+      // Own process group: npm forwards nothing on SIGTERM, so vite would outlive the run.
+      detached: true,
     });
+    const killTree = () => {
+      try {
+        if (child.pid) process.kill(-child.pid, "SIGTERM");
+      } catch {
+        child.kill("SIGTERM");
+      }
+    };
     let buf = "";
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill("SIGTERM");
+      killTree();
       reject(new Error(`vite did not print a URL\n${buf.slice(-2000)}`));
     }, 90_000);
     const onData = (chunk: Buffer) => {
@@ -80,9 +97,7 @@ function startDev(): Promise<{ url: string; stop: () => void }> {
       const port = match[1];
       resolveReady({
         url: `http://127.0.0.1:${port}/`,
-        stop: () => {
-          child.kill("SIGTERM");
-        },
+        stop: killTree,
       });
     };
     child.stdout?.on("data", onData);
@@ -145,15 +160,13 @@ function writeSequence(out: string, recorded: RecordedSequence, spec: SequenceSp
 
 function writeYaml(out: string) {
   const split = sequencesBySplit();
-  const yaml = `# CAM0 ground truth. Classes match the recorder: 0 vehicle, 1 unknown (debris/blockade).
+  const names = DATA_YAML.slice(DATA_YAML.indexOf("names:"));
+  const yaml = `# CAM0 ground truth. Classes match the recorder: 0 vehicle, 1 unknown (debris/blockade), 2 person, 3 bicycle, 4 motor (scooter/motorbike).
 path: ${out}
 train: images/train
 val: images/val
 test: images/test
-names:
-  0: vehicle
-  1: unknown
-`;
+${names}`;
   writeFileSync(join(out, "data.yaml"), yaml);
   writeFileSync(
     join(out, "split.json"),
@@ -181,10 +194,7 @@ function writeSample(sampleDir: string, recorded: RecordedSequence) {
     writeFileSync(join(sampleDir, "labels", `${stem}.txt`), frameToYolo(frame));
   });
   writeFileSync(join(sampleDir, "labels.jsonl"), framesToJsonl(keep));
-  writeFileSync(
-    join(sampleDir, "data.yaml"),
-    "path: .\ntrain: images\nval: images\nnames:\n  0: vehicle\n  1: unknown\n",
-  );
+  writeFileSync(join(sampleDir, "data.yaml"), DATA_YAML);
   const counts = keep.map((frame) => frame.objects.length);
   writeFileSync(
     join(sampleDir, "README.md"),
@@ -209,6 +219,8 @@ async function main() {
     const opened = await openPage(dev.url);
     browser = opened.browser;
     let sample: RecordedSequence | null = null;
+    const totals: ClassCounts = { vehicle: 0, unknown: 0, person: 0, bicycle: 0, motor: 0 };
+    const perSequence: Record<string, ClassCounts> = {};
     for (const spec of wanted) {
       console.log(`recording ${spec.id} (${spec.split}, ${spec.timeOfDay}, density ${spec.density})`);
       let recorded: { frames: CorpusFrame[]; pngs: string[] } | null = null;
@@ -237,10 +249,15 @@ async function main() {
       const typed: RecordedSequence = { id: spec.id, frames, pngs: recorded.pngs };
       writeSequence(args.out, typed, spec);
       const boxes = frames.reduce((n, frame) => n + frame.objects.length, 0);
-      console.log(`  ${frames.length} frames, ${boxes} boxes`);
+      const counts = classCounts(frames);
+      perSequence[spec.id] = counts;
+      for (const key of Object.keys(totals) as (keyof ClassCounts)[]) totals[key] += counts[key];
+      console.log(`  ${frames.length} frames, ${boxes} boxes ${JSON.stringify(counts)}`);
       if (!sample && spec.split === "train") sample = typed;
     }
     if (sample && !append) writeSample(args.sample, sample);
+    writeFileSync(join(args.out, "class-counts.json"), JSON.stringify({ totals, perSequence }, null, 2));
+    console.log(`class counts ${JSON.stringify(totals)}`);
   } finally {
     await browser?.close();
     dev.stop();

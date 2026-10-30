@@ -15,6 +15,7 @@ import {
 import {
   CORPUS_HEIGHT,
   CORPUS_WIDTH,
+  assertRoadInView,
   cameraRecord,
   debrisRecord,
   framesToJsonl,
@@ -448,8 +449,9 @@ export function recordLabels(trial: Trial, mode: SeeMode): CorpusFrame[] {
   const cars = makeCars(trial.cars);
   const sim = new TrafficSim(trial.seed);
   sim.loadFleet(cars, { seed: trial.seed, blocks: blocksAt(trial.debris, 0), links: LOOP_LINKS });
-  const buildings = buildingMeshes();
   const camera = makeDrone(trial.pose);
+  assertRoadInView(camera, `trial ${trial.id}`);
+  const buildings = buildingMeshes();
   const frames: CorpusFrame[] = [];
   const stepsPer = Math.max(1, Math.round(1 / LOOP_THRESHOLDS.hz / SIM_STEP));
   const frameCount = Math.round(trial.recordS * LOOP_THRESHOLDS.hz);
@@ -950,19 +952,6 @@ export const LOOP_TRIALS: Trial[] = [
     fix: "The barrier still covers more than a pixel at 82 m, and the ray stays confident.",
   },
   {
-    id: "horizon-tilt",
-    seed: 41,
-    stress: "Camera pitched above the horizon. Ground rays through the barriers do not descend.",
-    kind: "closure",
-    light: "day",
-    pose: POSE_UP,
-    debris: windowOn(ALL_NB),
-    cars: [...cohort(ALL_NB, 8, "nb", 1, 7.6, 9.4), ...SB],
-    recordS: 6,
-    legacyFault: "A ray that does not meet the ground produces no track, so the closure is missed.",
-    fix: "Not fixable in this contract. Monocular range needs a descending ray. Looking up cannot close a lane.",
-  },
-  {
     id: "detours-congested",
     seed: 43,
     stress: "Both side streets already carry a slow platoon that is still moving. Michigan is fully closed.",
@@ -1026,6 +1015,26 @@ export const LOOP_TRIALS: Trial[] = [
     fix: "Unknown-only closures. The queue is slow. Nobody is rerouted.",
   },
 ];
+
+/**
+ * Camera pitched above the horizon. It used to sit in the batch and record
+ * frames that could never close a lane, which read as a loop failure. The
+ * road-view guard now refuses to record it, so it lives outside
+ * `LOOP_TRIALS` and only exists to prove the guard.
+ */
+export const HORIZON_TILT_TRIAL: Trial = {
+    id: "horizon-tilt",
+    seed: 41,
+    stress: "Camera pitched above the horizon. Ground rays through the barriers do not descend.",
+    kind: "closure",
+    light: "day",
+    pose: POSE_UP,
+    debris: windowOn(ALL_NB),
+    cars: [...cohort(ALL_NB, 8, "nb", 1, 7.6, 9.4), ...SB],
+    recordS: 6,
+    legacyFault: "A ray that does not meet the ground produces no track, so the closure is missed.",
+    fix: "Not fixable in this contract. Monocular range needs a descending ray. Looking up cannot close a lane.",
+  };
 
 export function trialById(id: string): Trial {
   const trial = LOOP_TRIALS.find((item) => item.id === id);

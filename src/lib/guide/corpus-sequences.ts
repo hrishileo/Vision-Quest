@@ -127,7 +127,16 @@ export type SequenceSpec = {
   lookDriftZ: number;
   debris: DebrisPlacement[];
   blockades: BlockadePlacement[];
+  /**
+   * Nadir pass: the gimbal points straight down (camera pitch −π/2) and the
+   * drone heading faces (lookX, lookZ), which is image-up. Body pitch and
+   * roll are ignored.
+   */
+  topDown?: boolean;
 };
+
+/** AGL of the nadir passes, metres. */
+export const TOP_DOWN_ALTITUDES = [30, 60, 120] as const;
 
 export type RecordedSequence = {
   id: string;
@@ -570,7 +579,81 @@ export const SEQUENCES: readonly SequenceSpec[] = [
     ],
     blockades: [barrier("mich-nb-1", 64, 134)],
   },
+  {
+    id: "s17-noon-top30",
+    split: "train",
+    seed: 173,
+    density: 1.2,
+    timeOfDay: "noon",
+    ...CLIP,
+    warmupS: 20,
+    altitude: 30,
+    x: 2,
+    z: 4,
+    lookX: 2,
+    lookZ: -20,
+    pitch: 0,
+    roll: 0,
+    driftX: 0.3,
+    driftZ: -0.6,
+    lookDriftX: 0.3,
+    lookDriftZ: -0.6,
+    debris: [{ id: 2, ...onLane("mich-nb-1", 60), yaw: 0.3 }],
+    blockades: [],
+    topDown: true,
+  },
+  {
+    id: "s18-dawn-top60",
+    split: "train",
+    seed: 181,
+    density: 1,
+    timeOfDay: "dawn",
+    ...CLIP,
+    warmupS: 24,
+    altitude: 60,
+    x: 0,
+    z: -4,
+    lookX: 0,
+    lookZ: -30,
+    pitch: 0,
+    roll: 0,
+    driftX: -0.4,
+    driftZ: 0.5,
+    lookDriftX: -0.4,
+    lookDriftZ: 0.5,
+    debris: [{ id: 4, ...onLane("mich-sb-1", 70), yaw: 0.9 }],
+    blockades: [],
+    topDown: true,
+  },
+  {
+    id: "s19-noon-top120",
+    split: "val",
+    seed: 191,
+    density: 1.4,
+    timeOfDay: "noon",
+    ...CLIP,
+    warmupS: 30,
+    altitude: 120,
+    x: 1,
+    z: 0,
+    lookX: 1,
+    lookZ: -30,
+    pitch: 0,
+    roll: 0,
+    driftX: 0.5,
+    driftZ: 0,
+    lookDriftX: 0.5,
+    lookDriftZ: 0,
+    debris: [],
+    blockades: [barrier("mich-nb-1", 56, 135)],
+    topDown: true,
+  },
 ];
+
+/** Drone heading for a spec: the same yaw `aimDrone` derives from the look point. */
+export function sequenceYaw(spec: Pick<SequenceSpec, "x" | "z" | "lookX" | "lookZ">): number {
+  return Math.atan2(spec.lookX - spec.x, spec.lookZ - spec.z);
+}
 
 export function sequencesBySplit(sequences: readonly SequenceSpec[] = SEQUENCES): {
   train: SequenceSpec[];

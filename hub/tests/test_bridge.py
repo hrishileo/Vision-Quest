@@ -12,6 +12,7 @@ from horizon_vision.hub.bridge import (
     LOOP_HUB_FLOOR,
     DriverSpec,
     build_plans,
+    drivers_from_specs,
     hub_config_for,
     monitor_for,
     run_bridge,
@@ -295,3 +296,85 @@ def test_unknown_only_monitor_does_not_block_on_a_vehicle():
         got = {event.lane: event for event in monitor.update(t, [stall, debris])}
     assert got["mich-nb-1"].state == "slow"
     assert got["mich-nb-0"].state == "blocked"
+
+
+NON_ROAD_CLASSES = ("person", "bicycle", "motor")
+
+
+def _event(cls: str, lane: str, speed: float, t: float, track_id: str, x: float = 9.0) -> EdgeEvent:
+    return EdgeEvent(
+        cls=cls,
+        unknown=cls == "unknown",
+        x=x,
+        y=10.0,
+        speed=speed,
+        lane=lane,
+        confidence=0.9,
+        t=t,
+        track_id=track_id,
+    )
+
+
+# Gaps stay within max_gap_s (0.5) so a dwell would never reset.
+_DWELL_TIMES = tuple(round(0.25 * step, 2) for step in range(13))
+
+
+@pytest.mark.parametrize("policy", ["legacy", "loop"])
+@pytest.mark.parametrize("cls", NON_ROAD_CLASSES)
+def test_people_and_bikes_never_close_a_lane(policy: str, cls: str):
+    monitor = monitor_for(policy)
+    states = []
+    for t in _DWELL_TIMES:
+        # Stationary for 3 s, double the 1.5 s hold a vehicle or debris needs.
+        states.extend(monitor.update(t, [_event(cls, "mich-nb-2", 0.0, t, f"{cls}-1")]))
+    assert all(state.state != "blocked" for state in states)
+
+
+@pytest.mark.parametrize("policy", ["legacy", "loop"])
+@pytest.mark.parametrize("cls", NON_ROAD_CLASSES)
+def test_a_standing_person_does_not_slow_a_moving_lane(policy: str, cls: str):
+    def last(with_person: bool):
+        monitor = monitor_for(policy)
+        got = []
+        for t in _DWELL_TIMES:
+            tracks = [_event("vehicle", "mich-nb-1", 6.0, t, "veh-a", x=5.0)]
+            if with_person:
+                tracks.append(_event(cls, "mich-nb-1", 0.0, t, f"{cls}-1", x=5.5))
+            got = monitor.update(t, tracks)
+        return {state.lane: state for state in got}["mich-nb-1"]
+
+    alone = last(with_person=False)
+    mixed = last(with_person=True)
+    assert alone.state == "clear"
+    assert mixed.state == "clear"
+    assert mixed.speed == pytest.approx(alone.speed)
+
+
+@pytest.mark.parametrize("policy", ["legacy", "loop"])
+def test_reroute_fires_on_debris_and_never_on_people_or_bikes(policy: str):
+    graph = mag_mile_graph()
+
+    def plans_for(cls: str):
+        monitor = monitor_for(policy)
+        states = []
+        for t in _DWELL_TIMES:
+            states.extend(monitor.update(t, [_event(cls, "mich-nb-2", 0.0, t, f"{cls}-1")]))
+        drivers = drivers_from_specs(graph, _specs())
+        return build_plans(states, drivers, hub_config_for(policy), graph)
+
+    debris = plans_for("unknown")
+    assert any("mich-nb-2" in plan.blocked and plan.alerts for plan in debris)
+    for cls in NON_ROAD_CLASSES:
+        plans = plans_for(cls)
+        assert all(not plan.blocked for plan in plans), cls
+        assert all(not plan.alerts for plan in plans), cls
+
+
+def test_legacy_reroute_still_fires_on_a_stopped_vehicle():
+    graph = mag_mile_graph()
+    monitor = monitor_for("legacy")
+    states = []
+    for t in _DWELL_TIMES:
+        states.extend(monitor.update(t, [_event("vehicle", "mich-nb-2", 0.0, t, "veh-stall")]))
+    plans = build_plans(states, drivers_from_specs(graph, _specs()), hub_config_for("legacy"), graph)
+    assert any("mich-nb-2" in plan.blocked and plan.alerts for plan in plans)

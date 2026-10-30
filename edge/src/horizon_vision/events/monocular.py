@@ -90,25 +90,28 @@ def estimate_ground_point(
     if pose.agl <= 0 or fx <= 0 or fy <= 0:
         return None
     u, v = bbox.ground_contact
-    direction_cam = np.array(
-        [
-            (u - intrinsics.cx) / fx,
-            (intrinsics.cy - v) / fy,
-            -1.0,
-        ],
-        dtype=float,
+    # Plain float math, not numpy ``@`` / ``linalg.norm``. Those go through
+    # OpenBLAS, which picks a kernel per CPU (AVX-512 vs AVX2/FMA), so the
+    # last digit of the ray changed between CI runners. Python floats round
+    # each multiply and add the same way on every machine.
+    cam = (
+        (u - intrinsics.cx) / fx,
+        (intrinsics.cy - v) / fy,
+        -1.0,
     )
-    direction = world_from_camera(pose.yaw, pose.pitch, pose.roll) @ direction_cam
-    if direction[1] >= -_RAY_EPS:
+    rows = world_from_camera(pose.yaw, pose.pitch, pose.roll).tolist()
+    dx, dy, dz = (row[0] * cam[0] + row[1] * cam[1] + row[2] * cam[2] for row in rows)
+    if dy >= -_RAY_EPS:
         return None
     ground_y = pose.y - pose.agl
-    scale = (ground_y - pose.y) / direction[1]
+    scale = (ground_y - pose.y) / dy
     if scale <= 0:
         return None
-    point = np.array([pose.x, pose.y, pose.z], dtype=float) + scale * direction
-    norm = float(np.linalg.norm(direction))
+    hit_x = pose.x + scale * dx
+    hit_z = pose.z + scale * dz
+    norm = math.sqrt(dx * dx + dy * dy + dz * dz)
     if norm < _RAY_EPS:
         return None
     # Straight down is confident. A grazing ray is not.
-    confidence = float(np.clip(abs(direction[1]) / norm, 0.0, 1.0))
-    return GroundEstimate(x=float(point[0]), y=float(point[2]), confidence=confidence)
+    confidence = min(max(abs(dy) / norm, 0.0), 1.0)
+    return GroundEstimate(x=hit_x, y=hit_z, confidence=confidence)

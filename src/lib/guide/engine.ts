@@ -49,6 +49,8 @@ import {
   CORPUS_HEIGHT,
   CORPUS_WIDTH,
   CorpusSession,
+  agentRecord,
+  assertRoadInView,
   cameraRecord,
   debrisRecord,
   flipRgbaBottomUp,
@@ -1705,7 +1707,8 @@ export class GuideEngine {
     if (useGuide.getState().corpusRecording) useGuide.getState().setCorpusRecording(false);
   }
 
-  private applyScriptedSun(tod: TimeOfDay) {
+  /** `fogLift` pushes the fog band out by that many metres so a high nadir pass is not washed out. */
+  private applyScriptedSun(tod: TimeOfDay, fogLift = 0) {
     const sun = SUN[tod];
     this.hemi.color.setHex(sun.hemi);
     this.hemi.groundColor.setHex(sun.hemiGround);
@@ -1717,8 +1720,8 @@ export class GuideEngine {
     this.rim.intensity = sun.rim;
     this.scene.fog = this.pursuitFog;
     this.pursuitFog.color.setHex(sun.fog);
-    this.pursuitFog.near = sun.fogNear;
-    this.pursuitFog.far = sun.fogFar;
+    this.pursuitFog.near = sun.fogNear + fogLift;
+    this.pursuitFog.far = sun.fogFar + fogLift;
     const bg = this.scene.background;
     if (bg instanceof THREE.Color) bg.setHex(sun.sky);
     else this.scene.background = new THREE.Color(sun.sky);
@@ -1735,15 +1738,23 @@ export class GuideEngine {
     lookZ: number,
     pitch: number,
     roll: number,
+    nadir = false,
   ) {
     this.dronePos.set(x, altitude, z);
     this.yaw = Math.atan2(lookX - x, lookZ - z);
-    this.pitch = pitch;
-    this.roll = roll;
+    this.pitch = nadir ? 0 : pitch;
+    this.roll = nadir ? 0 : roll;
     this.drone.group.position.copy(this.dronePos);
     this.drone.group.rotation.order = "YXZ";
     this.drone.group.rotation.set(this.pitch, this.yaw, this.roll);
     this.drone.group.updateMatrixWorld(true);
+    if (nadir) {
+      // Straight down, past the ±1.05 pursuit clamp. Image-up faces the heading.
+      this.drone.gimbalYaw.rotation.y = 0;
+      this.drone.gimbalPitch.rotation.x = Math.PI / 2;
+      this.drone.droneCam.updateMatrixWorld(true);
+      return;
+    }
     const gPos = this.drone.gimbalYaw.getWorldPosition(_gpos);
     const local = new THREE.Vector3(lookX - gPos.x, 0.4 - gPos.y, lookZ - gPos.z).applyQuaternion(
       this.drone.group.getWorldQuaternion(_q).invert(),
@@ -1806,6 +1817,7 @@ export class GuideEngine {
   ): Promise<{ id: string; frames: CorpusFrame[]; pngs: string[] }> {
     const guide = useGuide.getState();
     const wasPaused = guide.paused;
+    let prevFar = this.drone.droneCam.far;
     this.scripted = true;
     useGuide.setState({ paused: true });
     guide.setCorpusRecording(true);
@@ -1819,7 +1831,12 @@ export class GuideEngine {
       this.world.group.visible = true;
       this.studioCar.visible = false;
       this.scriptedTod = spec.timeOfDay;
-      this.applyScriptedSun(spec.timeOfDay);
+      this.applyScriptedSun(spec.timeOfDay, spec.topDown ? spec.altitude : 0);
+      const cam = this.drone.droneCam;
+      prevFar = cam.far;
+      // A 120 m nadir corner ray runs about 1.75 × AGL. Keep the whole footprint inside the far plane.
+      if (spec.topDown) cam.far = Math.max(prevFar, spec.altitude * 2.5);
+      cam.updateProjectionMatrix();
 
       this.world.sim.reset(spec.seed, spec.density);
       syncWorldCars(this.world);
@@ -1850,7 +1867,17 @@ export class GuideEngine {
           spec.lookZ + spec.lookDriftZ * elapsed,
           spec.pitch,
           spec.roll,
+          spec.topDown === true,
         );
+        const viewAspect = cam.aspect;
+        cam.aspect = CORPUS_WIDTH / CORPUS_HEIGHT;
+        cam.updateProjectionMatrix();
+        try {
+          assertRoadInView(cam, `${spec.id} frame ${i}`);
+        } finally {
+          cam.aspect = viewAspect;
+          cam.updateProjectionMatrix();
+        }
         const png = this.sampleCorpusFrame();
         if (!png) throw new Error(`corpus frame ${i} did not render`);
         pngs.push(png);
@@ -1866,6 +1893,8 @@ export class GuideEngine {
         pngs: encoded.map((bytes) => bytesToBase64(bytes)),
       };
     } finally {
+      this.drone.droneCam.far = prevFar;
+      this.drone.droneCam.updateProjectionMatrix();
       this.corpus.stop();
       this.scripted = false;
       this.scriptedTod = null;
@@ -1946,6 +1975,26 @@ export class GuideEngine {
       }
       writeBoxCorners(box, this.corpusCorners);
       const rec = debrisRecord(rig.def, this.corpusCorners, cam, CORPUS_WIDTH, CORPUS_HEIGHT);
+      if (rec) objects.push(rec);
+    }
+    const agents = [...this.world.sim.agents].sort((a, b) => a.id - b.id);
+    for (const agent of agents) {
+      const rig = this.world.agents.find((item) => item.id === agent.id);
+      if (!rig) continue;
+      if (
+        !isVisibleInCamera(
+          cam,
+          camPos,
+          this.corpusSample.set(agent.x, 0.9, agent.z),
+          this.corpusAim.set(agent.x, 0.9, agent.z),
+          this.world.buildings,
+          scratch,
+        )
+      ) {
+        continue;
+      }
+      writeBoxCorners(this.corpusBox.setFromObject(rig.group), this.corpusCorners);
+      const rec = agentRecord(agent, this.corpusCorners, cam, CORPUS_WIDTH, CORPUS_HEIGHT);
       if (rec) objects.push(rec);
     }
     return objects;

@@ -384,3 +384,55 @@ export function carHitsBuilding(x: number, z: number, yaw: number): boolean {
   }
   return false;
 }
+
+/** Sidewalk strip outside each curb. Matches the slabs in `buildWorld`. */
+export const SIDEWALK_W = 6.8;
+/** Crosswalk centerlines. Michigan is crossed at z = ±XWALK_Z, Chicago at x = ±XWALK_X. */
+export const XWALK_Z = 10.6;
+export const XWALK_X = 11.7;
+const XWALK_HALF = 1.4;
+
+/** `laneIdAt` limited to Michigan and Chicago. Rush, Wabash, and the returns only exist in the loop scenes. */
+export function baseLaneIdAt(x: number, z: number): string | null {
+  const id = laneIdAt(x, z);
+  return id && LANE_BY_ID[id] ? id : null;
+}
+
+/** True when (x, z) is on Michigan or Chicago pavement, or on a detour lane. */
+export function onRoad(x: number, z: number): boolean {
+  if (Math.abs(x) <= MICH_CURB && Math.abs(z) <= SPAN) return true;
+  if (Math.abs(z) <= CHI_CURB && Math.abs(x) <= SPAN) return true;
+  return laneIdAt(x, z) !== null;
+}
+
+export function pointInBuilding(x: number, z: number, pad = 0): boolean {
+  for (const b of BUILDINGS) {
+    const a = buildingAabb(b);
+    if (x > a.minX - pad && x < a.maxX + pad && z > a.minZ - pad && z < a.maxZ + pad) return true;
+  }
+  return false;
+}
+
+/**
+ * Walking zone for a ground point: a crosswalk, a sidewalk, or a travel lane.
+ * Crosswalks win over lanes so a pedestrian crossing Michigan reads as
+ * `xwalk-mich-n`, not as the lane under their feet. Null off every zone.
+ */
+export function zoneAt(x: number, z: number): string | null {
+  if (Math.abs(x) <= MICH_CURB && Math.abs(Math.abs(z) - XWALK_Z) <= XWALK_HALF) {
+    return z < 0 ? "xwalk-mich-n" : "xwalk-mich-s";
+  }
+  if (Math.abs(z) <= CHI_CURB && Math.abs(Math.abs(x) - XWALK_X) <= XWALK_HALF) {
+    return x > 0 ? "xwalk-chi-e" : "xwalk-chi-w";
+  }
+  const lane = baseLaneIdAt(x, z);
+  if (lane) return lane;
+  const ax = Math.abs(x);
+  const az = Math.abs(z);
+  const michWalk = ax > MICH_CURB && ax <= MICH_CURB + SIDEWALK_W && az > CHI_CURB && az <= SPAN;
+  const chiWalk = az > CHI_CURB && az <= CHI_CURB + SIDEWALK_W && ax > MICH_CURB && ax <= SPAN;
+  if (michWalk && chiWalk) return `walk-corner-${z < 0 ? "n" : "s"}${x > 0 ? "e" : "w"}`;
+  if (michWalk) return x > 0 ? "walk-mich-e" : "walk-mich-w";
+  if (chiWalk) return z < 0 ? "walk-chi-n" : "walk-chi-s";
+  return null;
+}

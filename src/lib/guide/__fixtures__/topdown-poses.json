@@ -1,0 +1,37 @@
+{
+  "note": "Camera poses for the top-down and horizon-guard tests. Nadir heading uses the car convention (0 faces +Z); pi faces north.",
+  "nadir": [
+    {
+      "id": "top30",
+      "x": 2,
+      "agl": 30,
+      "z": 4,
+      "heading": 3.141592653589793,
+      "seed": 173,
+      "density": 1.2,
+      "warmupS": 20
+    },
+    {
+      "id": "top60",
+      "x": 0,
+      "agl": 60,
+      "z": -4,
+      "heading": 3.141592653589793,
+      "seed": 181,
+      "density": 1,
+      "warmupS": 24
+    },
+    {
+      "id": "top120",
+      "x": 1,
+      "agl": 120,
+      "z": 0,
+      "heading": 3.141592653589793,
+      "seed": 191,
+      "density": 1.4,
+      "warmupS": 30
+    }
+  ],
+  "aboveHorizon": { "x": 6, "y": 14, "z": -8, "yaw": 0, "pitch": 0.42, "roll": 0 },
+  "skyOnly": { "x": 0, "y": 40, "z": 0, "yaw": 0, "pitch": 0.9, "roll": 0 }
+}

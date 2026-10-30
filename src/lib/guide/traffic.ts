@@ -1,6 +1,7 @@
 import {
   BUILDINGS,
   CAR_L,
+  CAR_W,
   LANES,
   MAG_MILE,
   PARK_X,
@@ -15,6 +16,7 @@ import {
   wrapS,
   type LaneDef,
 } from "./city.ts";
+import { spawnAgents, stepAgents, type AgentSignals, type SimAgent } from "./agents.ts";
 
 const A_MAX = 1.45;
 const B_COM = 2.15;
@@ -196,8 +198,17 @@ function losFromKmh(kmh: number): { los: LosGrade; congestion: Congestion } {
   return { los, congestion };
 }
 
+/** Seconds of green left in the fixed 64 s cycle. 0 when the approach is not green. */
+export function greenLeftAt(time: number, approach: LaneDef["approach"]): number {
+  const t = ((time % CYCLE) + CYCLE) % CYCLE;
+  if (approach === "NS") return t < 28 ? 28 - t : 0;
+  return t >= 34 && t < 58 ? 58 - t : 0;
+}
+
 export class TrafficSim {
   cars: SimCar[] = [];
+  /** Pedestrians, bicycles, scooters, motorbikes. Empty for scripted fleets. */
+  agents: SimAgent[] = [];
   time = 0;
   subjectId = 0;
   nsLit: SignalLit = "g";
@@ -225,16 +236,21 @@ export class TrafficSim {
     this.links = [];
     this.syncSignals();
     this.spawn();
+    this.agents = spawnAgents(seed >>> 0, scale);
   }
 
   /** Replace the fleet. Used by the detour scenario; the default pursuit spawn does not call this. */
-  loadFleet(cars: SimCar[], opts?: { seed?: number; blocks?: LaneBlock[]; links?: RouteLink[] }) {
+  loadFleet(
+    cars: SimCar[],
+    opts?: { seed?: number; blocks?: LaneBlock[]; links?: RouteLink[]; agents?: SimAgent[] },
+  ) {
     this.rng = mulberry32((opts?.seed ?? 1) >>> 0);
     this.time = 0;
     this.acc = 0;
     this.cars = cars;
     this.blocks = opts?.blocks?.map((b) => ({ ...b })) ?? [];
     this.links = opts?.links?.map((l) => ({ ...l })) ?? [];
+    this.agents = opts?.agents ?? [];
     this.subjectId = cars.find((c) => c.subject)?.id ?? cars[0]?.id ?? 0;
     this.syncSignals();
     for (const car of this.cars) poseCar(car);
@@ -420,7 +436,26 @@ export class TrafficSim {
       }
     }
     for (const c of this.cars) poseCar(c);
+    if (this.agents.length) stepAgents(this.agents, dt, this.agentSignals);
   }
+
+  private agentSignals: AgentSignals = {
+    lit: (approach) => this.litFor(approach),
+    greenLeft: (approach) => greenLeftAt(this.time, approach),
+    blocked: (a, b, half) => {
+      const minX = Math.min(a.x, b.x) - half;
+      const maxX = Math.max(a.x, b.x) + half;
+      const minZ = Math.min(a.z, b.z) - half;
+      const maxZ = Math.max(a.z, b.z) + half;
+      return this.cars.some((c) => {
+        if (c.parked) return false;
+        const alongZ = Math.abs(Math.sin(c.yaw)) < 0.5;
+        const hx = alongZ ? CAR_W * 0.5 : c.length * 0.5;
+        const hz = alongZ ? c.length * 0.5 : CAR_W * 0.5;
+        return c.x + hx > minX && c.x - hx < maxX && c.z + hz > minZ && c.z - hz < maxZ;
+      });
+    },
+  };
 
   private follow(car: SimCar, leader: SimCar | null, lane: LaneDef, dt: number) {
     const stalled = car.subject && this.time < car.stallUntil;

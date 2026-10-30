@@ -19,6 +19,7 @@ import {
   type BuildingFoot,
 } from "./city";
 import { TrafficSim, type SimCar, type TrafficDiag } from "./traffic";
+import { AGENT_SIZE, type AgentType, type SimAgent } from "./agents";
 import { DEBRIS, type DebrisDef } from "./debris";
 
 export type CarRig = {
@@ -27,6 +28,12 @@ export type CarRig = {
   id: number;
   color: number;
   parked: boolean;
+};
+
+export type AgentRig = {
+  group: THREE.Group;
+  id: number;
+  type: AgentType;
 };
 
 export type SignalHead = {
@@ -46,6 +53,8 @@ export type DebrisRig = {
 export type WorldBuild = {
   group: THREE.Group;
   cars: CarRig[];
+  /** Pedestrian, bicycle, scooter, and motorbike rigs, one per `sim.agents` entry. */
+  agents: AgentRig[];
   buildings: THREE.Object3D[];
   debris: DebrisRig[];
   materials: THREE.Material[];
@@ -55,7 +64,104 @@ export type WorldBuild = {
   signals: SignalHead[];
   loc: typeof MAG_MILE;
   spawnCar: (car: SimCar) => CarRig;
+  spawnAgent: (agent: SimAgent) => AgentRig;
 };
+
+const SHIRTS = [0x2f5d8a, 0xa8432f, 0x3e7a4c, 0xd2b34a, 0x6b4a8a, 0xe6e2da, 0x2a2a2e, 0xc77a3a];
+
+type AgentKit = {
+  box: THREE.BoxGeometry;
+  head: THREE.SphereGeometry;
+  wheel: THREE.TorusGeometry;
+  skin: THREE.MeshStandardMaterial;
+  pants: THREE.MeshStandardMaterial;
+  frame: THREE.MeshStandardMaterial;
+  tire: THREE.MeshStandardMaterial;
+  shirts: THREE.MeshStandardMaterial[];
+};
+
+function part(
+  kit: AgentKit,
+  mat: THREE.Material,
+  sx: number,
+  sy: number,
+  sz: number,
+  x: number,
+  y: number,
+  z: number,
+): THREE.Mesh {
+  const m = new THREE.Mesh(kit.box, mat);
+  m.scale.set(sx, sy, sz);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  return m;
+}
+
+/** Person standing at the origin, `top` metres tall, feet at `feet`. */
+function figure(kit: AgentKit, shirt: THREE.Material, feet: number, top: number, seated: boolean): THREE.Group {
+  const g = new THREE.Group();
+  const head = 0.22;
+  const torsoTop = top - head;
+  const hip = seated ? torsoTop - 0.58 : feet + (top - feet) * 0.47;
+  if (!seated) g.add(part(kit, kit.pants, 0.34, hip - feet, 0.22, 0, (hip + feet) / 2, 0));
+  g.add(part(kit, shirt, 0.42, torsoTop - hip, 0.26, 0, (torsoTop + hip) / 2, 0));
+  const h = new THREE.Mesh(kit.head, kit.skin);
+  h.position.set(0, top - head / 2, 0);
+  h.castShadow = true;
+  g.add(h);
+  return g;
+}
+
+function wheel(kit: AgentKit, r: number, z: number): THREE.Mesh {
+  const w = new THREE.Mesh(kit.wheel, kit.tire);
+  w.scale.set(r, r, 1);
+  w.rotation.y = Math.PI / 2;
+  w.position.set(0, r, z);
+  w.castShadow = true;
+  return w;
+}
+
+/** Rig sized to `AGENT_SIZE`, length along local +Z (the heading). */
+function makeAgentRig(kit: AgentKit, agent: SimAgent): THREE.Group {
+  const size = AGENT_SIZE[agent.type];
+  const shirt = kit.shirts[agent.id % kit.shirts.length]!;
+  const g = new THREE.Group();
+  const hl = size.length / 2;
+  if (agent.type === "person") {
+    g.add(figure(kit, shirt, 0, size.height, false));
+  } else if (agent.type === "bicycle") {
+    const r = 0.34;
+    g.add(wheel(kit, r, hl - r), wheel(kit, r, -hl + r));
+    g.add(part(kit, kit.frame, 0.06, 0.08, size.length - 2 * r, 0, 0.62, 0));
+    g.add(part(kit, kit.frame, 0.06, 0.5, 0.06, 0, 0.62, hl - r));
+    const rider = figure(kit, shirt, 0.62, size.height, true);
+    rider.position.z = -0.12;
+    rider.rotation.x = 0.25;
+    g.add(rider);
+  } else if (agent.type === "scooter") {
+    const r = 0.1;
+    g.add(wheel(kit, r, hl - r), wheel(kit, r, -hl + r));
+    g.add(part(kit, kit.frame, 0.16, 0.05, size.length - 2 * r, 0, 0.14, 0));
+    g.add(part(kit, kit.frame, 0.05, 0.95, 0.05, 0, 0.62, hl - 0.14));
+    g.add(part(kit, kit.frame, size.width, 0.04, 0.05, 0, 1.08, hl - 0.14));
+    const rider = figure(kit, shirt, 0.17, size.height, false);
+    rider.position.z = -0.08;
+    g.add(rider);
+  } else {
+    const r = 0.32;
+    g.add(wheel(kit, r, hl - r), wheel(kit, r, -hl + r));
+    g.add(part(kit, shirt, 0.36, 0.42, size.length - 2 * r, 0, 0.62, 0));
+    g.add(part(kit, kit.frame, size.width, 0.04, 0.05, 0, 1.0, hl - 0.4));
+    const rider = figure(kit, kit.frame, 0.8, size.height, true);
+    rider.position.z = -0.2;
+    g.add(rider);
+  }
+  g.userData.agent = true;
+  g.userData.agentId = agent.id;
+  g.position.set(agent.x, 0, agent.z);
+  g.rotation.y = agent.yaw;
+  return g;
+}
 
 function mesh(geo: THREE.BufferGeometry, mat: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
   const m = new THREE.Mesh(geo, mat);
@@ -284,7 +390,8 @@ export function buildWorld(): WorldBuild {
     bagMat,
   ];
 
-  const groundGeo = new THREE.PlaneGeometry(200, 200);
+  // Wide enough that a 120 m nadir pass still sees ground at the frame edge.
+  const groundGeo = new THREE.PlaneGeometry(420, 420);
   geos.push(groundGeo);
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = -Math.PI / 2;
@@ -486,6 +593,25 @@ export function buildWorld(): WorldBuild {
   };
   const cars: CarRig[] = sim.cars.map((c) => spawnCar(c));
 
+  const kit: AgentKit = {
+    box: new THREE.BoxGeometry(1, 1, 1),
+    head: new THREE.SphereGeometry(0.11, 10, 8),
+    wheel: new THREE.TorusGeometry(1, 0.08, 6, 16),
+    skin: new THREE.MeshStandardMaterial({ color: 0xb08468, roughness: 0.8 }),
+    pants: new THREE.MeshStandardMaterial({ color: 0x2c3240, roughness: 0.85 }),
+    frame: new THREE.MeshStandardMaterial({ color: 0x1f2226, roughness: 0.5, metalness: 0.5 }),
+    tire: rubber,
+    shirts: SHIRTS.map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.82 })),
+  };
+  geos.push(kit.box, kit.head, kit.wheel);
+  materials.push(kit.skin, kit.pants, kit.frame, ...kit.shirts);
+  const spawnAgent = (agent: SimAgent): AgentRig => {
+    const rig = { group: makeAgentRig(kit, agent), id: agent.id, type: agent.type };
+    group.add(rig.group);
+    return rig;
+  };
+  const agents: AgentRig[] = sim.agents.map((agent) => spawnAgent(agent));
+
   const debris = spawnDebris(group, geos, materials, {
     rubber,
     wood: woodMat,
@@ -500,6 +626,7 @@ export function buildWorld(): WorldBuild {
   return {
     group,
     cars,
+    agents,
     buildings,
     debris,
     materials,
@@ -509,12 +636,41 @@ export function buildWorld(): WorldBuild {
     signals,
     loc: MAG_MILE,
     spawnCar,
+    spawnAgent,
   };
 }
 
 export function syncWorldCars(world: WorldBuild) {
   for (const rig of world.cars) world.group.remove(rig.group);
   world.cars = world.sim.cars.map((car) => world.spawnCar(car));
+  syncWorldAgents(world);
+}
+
+export function syncWorldAgents(world: WorldBuild) {
+  for (const rig of world.agents) world.group.remove(rig.group);
+  world.agents = world.sim.agents.map((agent) => world.spawnAgent(agent));
+}
+
+function agentsInSync(world: WorldBuild): boolean {
+  const { agents } = world.sim;
+  if (agents.length !== world.agents.length) return false;
+  for (let i = 0; i < agents.length; i++) {
+    const rig = world.agents[i]!;
+    if (rig.id !== agents[i]!.id || rig.type !== agents[i]!.type) return false;
+  }
+  return true;
+}
+
+/** Rebuilds the rigs when the sim's agent set changed (reset, scripted fleet), then poses them. */
+export function poseWorldAgents(world: WorldBuild) {
+  if (!agentsInSync(world)) syncWorldAgents(world);
+  const agents = world.sim.agents;
+  for (let i = 0; i < agents.length; i++) {
+    const a = agents[i]!;
+    const rig = world.agents[i]!;
+    rig.group.position.set(a.x, 0, a.z);
+    rig.group.rotation.y = a.yaw;
+  }
 }
 
 /** Pavement for the measurement loop. Not part of the default road mesh. */
@@ -667,6 +823,7 @@ export function poseWorldCars(world: WorldBuild, dt: number) {
     const spin = (c.v / 0.28) * dt;
     for (const w of rig.wheels) w.rotation.x += spin;
   }
+  poseWorldAgents(world);
 }
 
 export function worldDiag(world: WorldBuild): TrafficDiag {

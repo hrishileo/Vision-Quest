@@ -1,5 +1,13 @@
 import * as THREE from "three";
-import { laneIdAt } from "./city.ts";
+import { laneIdAt, onRoad } from "./city.ts";
+import {
+  AGENT_TRACK_PREFIX,
+  agentClass,
+  agentLane,
+  agentTrackId,
+  agentZone,
+  type AgentType,
+} from "./agents.ts";
 import { DEBRIS_TYPE_LABEL, type DebrisDef, type DebrisKind } from "./debris.ts";
 import { VIEW_NDC } from "./visibility.ts";
 
@@ -10,13 +18,24 @@ export const CORPUS_HZ_DEFAULT = 10;
 export const CORPUS_HZ_MAX = 30;
 export const CORPUS_SCHEMA = 1;
 
-export const YOLO_CLASS_ID = { vehicle: 0, unknown: 1 } as const;
+/** 0 and 1 keep their original meaning. New classes append so old YOLO txt files stay valid. */
+export const YOLO_CLASS_ID = { vehicle: 0, unknown: 1, person: 2, bicycle: 3, motor: 4 } as const;
+export const LEGACY_CLASSES: ReadonlySet<LabelClass> = new Set<LabelClass>(["vehicle", "unknown"]);
+const AGENT_TYPES: Record<string, AgentType[]> = {
+  person: ["person"],
+  bicycle: ["bicycle"],
+  motor: ["scooter", "motorbike"],
+};
 
 const DEBRIS_TYPES = new Set(Object.keys(DEBRIS_TYPE_LABEL));
 
 export type Vec3 = { x: number; y: number; z: number };
 export type PixelBox = { x: number; y: number; w: number; h: number };
-export type LabelClass = "vehicle" | "unknown";
+/**
+ * Training class. Debris and blockades stay `unknown`; their real type is in
+ * `type`. Scooters and motorbikes share `motor`.
+ */
+export type LabelClass = "vehicle" | "unknown" | "person" | "bicycle" | "motor";
 
 export type Intrinsics = {
   fovY: number;
@@ -49,6 +68,12 @@ export type CorpusObject = {
   /** Lane speed in m/s for vehicles. Null for debris and blockades. */
   speed: number | null;
   bbox: PixelBox;
+  /**
+   * Person, bicycle, and motor only: travel-lane id for riders, crosswalk
+   * (`xwalk-*`) or sidewalk (`walk-*`) zone for pedestrians. Vehicles and
+   * debris omit it so their records are unchanged.
+   */
+  zone?: string | null;
 };
 
 export type CorpusFrame = {
@@ -164,6 +189,32 @@ export function cameraRecord(
   };
 }
 
+/**
+ * Straight-down camera, the pose a `topDown` pass records. `heading` uses the
+ * car convention (0 faces +Z) and becomes image-up. Headless twin of the
+ * drone gimbal at nadir.
+ */
+export function nadirCamera(
+  x: number,
+  agl: number,
+  z: number,
+  heading: number,
+  fovY = 70,
+): THREE.PerspectiveCamera {
+  const camera = new THREE.PerspectiveCamera(
+    fovY,
+    CORPUS_WIDTH / CORPUS_HEIGHT,
+    0.04,
+    Math.max(180, agl * 2.5),
+  );
+  camera.rotation.order = "YXZ";
+  camera.position.set(x, agl, z);
+  camera.rotation.set(-Math.PI / 2, heading + Math.PI, 0);
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld(true);
+  return camera;
+}
+
 export function laneForVehicle(laneId: string, parked: boolean): string | null {
   if (parked || laneId === "park") return null;
   return laneId;
@@ -218,6 +269,112 @@ export function debrisRecord(
     speed: null,
     bbox,
   };
+}
+
+type AgentPose = {
+  id: number;
+  type: AgentType;
+  x: number;
+  z: number;
+  v: number;
+  laneId: string | null;
+};
+
+/** Pedestrian, bicycle, scooter, or motorbike. Rider and vehicle share one box. */
+export function agentRecord(
+  agent: AgentPose,
+  corners: readonly Vec3[],
+  camera: THREE.Camera,
+  width: number,
+  height: number,
+): CorpusObject | null {
+  const bbox = projectBox(camera, corners, width, height);
+  if (!bbox) return null;
+  return {
+    trackId: agentTrackId(agent),
+    class: agentClass(agent),
+    type: agent.type,
+    kind: null,
+    laneId: agentLane(agent),
+    position: { x: agent.x, y: 0, z: agent.z },
+    speed: agent.v,
+    bbox,
+    zone: agentZone(agent),
+  };
+}
+
+/** The frame as the two-class schema-1 contract: vehicles and unknowns only. */
+export function legacyFrame(frame: CorpusFrame): CorpusFrame {
+  return { ...frame, objects: frame.objects.filter((obj) => LEGACY_CLASSES.has(obj.class)) };
+}
+
+export function hasAgentLabels(frames: readonly CorpusFrame[]): boolean {
+  return frames.some((frame) => frame.objects.some((obj) => !LEGACY_CLASSES.has(obj.class)));
+}
+
+export type ClassCounts = Record<LabelClass, number>;
+
+export function classCounts(frames: readonly CorpusFrame[]): ClassCounts {
+  const out: ClassCounts = { vehicle: 0, unknown: 0, person: 0, bicycle: 0, motor: 0 };
+  for (const frame of frames) for (const obj of frame.objects) out[obj.class] += 1;
+  return out;
+}
+
+export type RoadView = {
+  /** Optical axis points below the horizon. */
+  descends: boolean;
+  /** Grid rays that land on pavement inside the far plane. */
+  roadHits: number;
+  samples: number;
+};
+
+const _ray = new THREE.Vector3();
+const _origin = new THREE.Vector3();
+const _axis = new THREE.Vector3();
+
+/** Cast a 16×9 grid of pixel rays at the ground plane and count the ones that land on the road. */
+export function roadView(camera: THREE.PerspectiveCamera): RoadView {
+  camera.updateMatrixWorld();
+  camera.getWorldPosition(_origin);
+  camera.getWorldDirection(_axis);
+  let roadHits = 0;
+  let samples = 0;
+  const cols = 16;
+  const rows = 9;
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      samples += 1;
+      const nx = -1 + (2 * (i + 0.5)) / cols;
+      const ny = -1 + (2 * (j + 0.5)) / rows;
+      _ray.set(nx, ny, 0.5).unproject(camera).sub(_origin).normalize();
+      if (_ray.y > -1e-6 || _origin.y <= 0) continue;
+      const t = -_origin.y / _ray.y;
+      if (t > camera.far) continue;
+      if (onRoad(_origin.x + _ray.x * t, _origin.z + _ray.z * t)) roadHits += 1;
+    }
+  }
+  return { descends: _axis.y < 0, roadHits, samples };
+}
+
+export class RoadOutOfViewError extends Error {
+  readonly label: string;
+  readonly view: RoadView;
+
+  constructor(label: string, view: RoadView) {
+    super(
+      `${label}: camera leaves the road out of view (axis ${view.descends ? "below" : "above"} the horizon, ${view.roadHits}/${view.samples} rays on pavement). Refusing to record.`,
+    );
+    this.name = "RoadOutOfViewError";
+    this.label = label;
+    this.view = view;
+  }
+}
+
+/** Throws when the optical axis is at or above the horizon, or no grid ray reaches pavement. */
+export function assertRoadInView(camera: THREE.PerspectiveCamera, label: string): RoadView {
+  const view = roadView(camera);
+  if (!view.descends || view.roadHits === 0) throw new RoadOutOfViewError(label, view);
+  return view;
 }
 
 export function makeFrame(input: {
@@ -281,6 +438,14 @@ export function validateFrame(frame: CorpusFrame): string[] {
       if (obj.kind !== "debris" && obj.kind !== "blockade") errors.push("kind");
       if (obj.laneId !== null && obj.laneId.length === 0) errors.push("debris lane");
       if (obj.speed !== null) errors.push("debris speed");
+    } else if (obj.class in AGENT_TYPES) {
+      const prefix = AGENT_TRACK_PREFIX[obj.class as keyof typeof AGENT_TRACK_PREFIX];
+      if (!obj.trackId.startsWith(`${prefix}-`)) errors.push(`${obj.class} track`);
+      if (!AGENT_TYPES[obj.class]!.includes(obj.type as AgentType)) errors.push(`type ${obj.type}`);
+      if (obj.kind !== null) errors.push(`${obj.class} kind`);
+      if (obj.speed === null || !Number.isFinite(obj.speed) || obj.speed < 0) errors.push("speed");
+      if (obj.laneId !== null && obj.laneId.length === 0) errors.push("lane");
+      if (obj.zone !== undefined && obj.zone !== null && obj.zone.length === 0) errors.push("zone");
     } else {
       errors.push("class");
     }
@@ -385,7 +550,8 @@ These labels are **ground truth** from the Vision Quest Mag Mile pursuit sim (CA
 ## Layout
 
 - \`images/000000.png\` — CAM0 render, ${meta.width}×${meta.height}, PNG
-- \`labels.jsonl\` — one JSON object per frame
+- \`labels.jsonl\` — one JSON object per frame, vehicles and unknowns only (the two-class contract)
+- \`labels.all.jsonl\` — same frames with every class, written only when a frame has a person, bicycle, or motor
 - \`labels/000000.txt\` — YOLO txt, same stem as the image
 - \`data.yaml\` — class ids for a YOLO trainer
 
@@ -401,14 +567,15 @@ These labels are **ground truth** from the Vision Quest Mag Mile pursuit sim (CA
 | \`camera.agl\` | height above the ground plane. The ground plane is \`y = 0\`, so AGL is camera world Y |
 | \`camera.yaw\` \`pitch\` \`roll\` | camera world Euler, radians, order YXZ (pitch, yaw, roll) |
 | \`camera.intrinsics\` | vertical fov in degrees, resolution, focal length and principal point in pixels |
-| \`objects[]\` | vehicles and debris/blockades inside the CAM0 frustum and not occluded by a building |
+| \`objects[]\` | vehicles, debris/blockades, pedestrians, bicycles, scooters, and motorbikes inside the CAM0 frustum and not occluded by a building |
 
 ## Object fields
 
 | Field | Meaning |
 | --- | --- |
-| \`trackId\` | \`veh-<id>\` or \`deb-<id>\`. Stable for the life of the sim. Same ids as the scene scan contacts |
-| \`class\` | training class: \`vehicle\` or \`unknown\` |
+| \`trackId\` | \`veh-<id>\`, \`deb-<id>\`, \`ped-<id>\`, \`bike-<id>\`, or \`motor-<id>\`. Stable for the life of the sim. Vehicle and debris ids match the scene scan contacts |
+| \`class\` | training class: \`vehicle\`, \`unknown\`, \`person\`, \`bicycle\`, or \`motor\` |
+| \`zone\` | person, bicycle, and motor only. Riders: their curb lane. Pedestrians: \`xwalk-mich-n\`/\`-s\`, \`xwalk-chi-e\`/\`-w\`, \`walk-mich-e\`/\`-w\`, \`walk-chi-n\`/\`-s\`, \`walk-corner-ne\` and the other corners. Vehicles and debris omit the field |
 | \`type\` | real sim type. \`vehicle\` for cars. Debris/blockades keep \`tire\` \`crate\` \`barrier\` \`cone\` \`branch\` \`rubble\` \`pallet\` \`bag\` |
 | \`kind\` | \`null\` for vehicles. \`debris\` or \`blockade\` otherwise |
 | \`laneId\` | travel-lane id, or \`null\` when the object is parked, on the curb, or off-lane. Debris uses the lane its ground position sits in, and \`null\` when that point is off the travel lanes |
@@ -419,6 +586,8 @@ These labels are **ground truth** from the Vision Quest Mag Mile pursuit sim (CA
 ## Class policy
 
 Vehicles use class \`vehicle\` (YOLO id 0). Every debris or blockade object uses class \`unknown\` (YOLO id 1) in \`class\`, and stores its real \`type\` and \`kind\` beside that so a later split does not need a re-render.
+
+Pedestrians are \`person\` (YOLO id 2), bicycles are \`bicycle\` (3), and scooters and motorbikes are \`motor\` (4); \`type\` keeps \`person\`, \`bicycle\`, \`scooter\`, or \`motorbike\`. A rider is part of the bicycle, scooter, or motorbike box and is not labeled separately. Their \`speed\` is ground speed in m/s.
 
 ## Visibility
 
@@ -477,6 +646,9 @@ val: images
 names:
   0: vehicle
   1: unknown
+  2: person
+  3: bicycle
+  4: motor
 `;
 
 export type ZipEntry = { name: string; data: Uint8Array };
@@ -507,9 +679,12 @@ export function corpusArchiveEntries(
         }),
       ),
     },
-    { name: `${root}labels.jsonl`, data: enc.encode(framesToJsonl(frames)) },
+    { name: `${root}labels.jsonl`, data: enc.encode(framesToJsonl(frames.map(legacyFrame))) },
     { name: `${root}data.yaml`, data: enc.encode(DATA_YAML) },
   ];
+  if (hasAgentLabels(frames)) {
+    entries.push({ name: `${root}labels.all.jsonl`, data: enc.encode(framesToJsonl(frames)) });
+  }
   frames.forEach((frame, i) => {
     const stem = frameStem(frame.index);
     const png = pngs[i];

@@ -11,12 +11,20 @@ Two policies:
 - ``loop`` closes a lane only for class ``unknown`` (debris), trusts a block
   down to the edge publish floor (0.2), and lets a shallow debris ray dwell
   at 0.05. A stall or a queue stays ``slow``.
+
+Debris hold (``loop`` only): once a lane is published ``blocked``, the hub
+keeps it blocked for ``LOOP_BLOCKED_HOLD_S`` after the last ``blocked``
+sample, so a one- or two-frame detection dropout does not clear the lane and
+replan every driver. Under ``loop`` only debris can produce ``blocked``, so
+the hold never covers a stopped vehicle. ``legacy`` has no hold: there a
+``blocked`` lane may be a stall, and the hub cannot tell which.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -30,6 +38,14 @@ from horizon_vision.hub.scenario import corridor_of
 
 LOOP_UNKNOWN_FLOOR = 0.05
 LOOP_HUB_FLOOR = 0.2
+# Three frames at the 10 Hz corpus rate. Covers every dropout seen with 15%
+# of edge events dropped (10 seeds, Mag Mile trials) and adds 0.3 s to the
+# clear time, well inside the sim's 1.6 s clear grace.
+# Sim-tuned: 0.3 s fits the sim's scripted 1.6 s clear limit. Recheck it
+# against real drone footage before trusting it in the field.
+LOOP_BLOCKED_HOLD_S = 0.3
+# Frame times are sums of 0.1 s steps; absorb float error at the hold edge.
+HOLD_EPS_S = 1e-6
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +89,14 @@ def hub_config_for(policy: str) -> HubConfig:
     raise ValueError(f"unknown policy {policy!r}")
 
 
+def blocked_hold_for(policy: str) -> float:
+    if policy == "legacy":
+        return 0.0
+    if policy == "loop":
+        return LOOP_BLOCKED_HOLD_S
+    raise ValueError(f"unknown policy {policy!r}")
+
+
 def drivers_from_specs(graph: StreetGraph, specs: Sequence[DriverSpec]) -> list[Driver]:
     drivers: list[Driver] = []
     for spec in specs:
@@ -111,29 +135,44 @@ def build_plans(
     config: HubConfig,
     graph: StreetGraph | None = None,
     closures_only: bool = False,
+    blocked_hold_s: float = 0.0,
 ) -> list[Plan]:
     """Replan whenever the blocked-lane set changes. Absence of a block clears it.
 
     ``closures_only`` drops alerts whose reason is a slow or cautious lane.
     A southbound driver with a momentary slow reading must not be sent around
     the block on Michigan.
+
+    ``blocked_hold_s`` keeps a lane blocked for that long after its last
+    ``blocked`` sample, whatever the lane reports in between. The planner sees
+    that last ``blocked`` sample for a held lane. Zero turns the hold off.
     """
+    if not math.isfinite(blocked_hold_s) or blocked_hold_s < 0:
+        raise ValueError("blocked_hold_s must be a finite number >= 0")
     street = graph if graph is not None else mag_mile_graph()
     by_t: dict[float, list[LaneStateEvent]] = {}
     for state in states:
         by_t.setdefault(state.t, []).append(state)
     latest: dict[str, LaneStateEvent] = {}
+    last_blocked: dict[str, LaneStateEvent] = {}
     blocked: set[str] = set()
     plans: list[Plan] = []
     for t in sorted(by_t):
         for state in by_t[t]:
             latest[state.lane] = state
-        now = {lane for lane, state in latest.items() if state.state == "blocked"}
+            if state.state == "blocked":
+                last_blocked[state.lane] = state
+        for lane in list(last_blocked):
+            if t - last_blocked[lane].t > blocked_hold_s + HOLD_EPS_S:
+                del last_blocked[lane]
+        view = dict(latest)
+        view.update(last_blocked)
+        now = {lane for lane, state in view.items() if state.state == "blocked"}
         if now == blocked:
             continue
         blocked = set(now)
         if blocked:
-            hub_states = [lane_state_from_mapping(item) for item in _snapshot(latest)]
+            hub_states = [lane_state_from_mapping(item) for item in _snapshot(view)]
             alerts = tuple(plan_reroutes(street, drivers, hub_states, t, config))
             if closures_only:
                 alerts = tuple(alert for alert in alerts if ":blocked" in alert.reason)
@@ -157,6 +196,7 @@ def run_bridge(
         hub_config_for(policy),
         graph,
         closures_only=policy == "loop",
+        blocked_hold_s=blocked_hold_for(policy),
     )
     return states, plans
 

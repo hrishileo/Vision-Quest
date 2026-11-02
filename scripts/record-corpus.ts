@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page } from "playwright";
 import {
   DATA_YAML,
+  MIN_PERSON_PX,
   classCounts,
   frameToYolo,
   framesToJsonl,
@@ -155,6 +156,13 @@ function writeSequence(out: string, recorded: RecordedSequence, spec: SequenceSp
     writeFileSync(join(splitLabels, `${flat}.txt`), yolo);
   });
   writeFileSync(join(root, "labels.jsonl"), framesToJsonl(recorded.frames));
+  // Person boxes under MIN_PERSON_PX. Audit trail only: not in labels.jsonl or the YOLO txt.
+  writeFileSync(
+    join(root, "culled.jsonl"),
+    (recorded.culled ?? [])
+      .map((objects, i) => JSON.stringify({ index: recorded.frames[i]?.index ?? i, objects }))
+      .join("\n") + "\n",
+  );
   writeFileSync(join(root, "meta.json"), JSON.stringify(spec, null, 2));
 }
 
@@ -221,9 +229,13 @@ async function main() {
     let sample: RecordedSequence | null = null;
     const totals: ClassCounts = { vehicle: 0, unknown: 0, person: 0, bicycle: 0, motor: 0 };
     const perSequence: Record<string, ClassCounts> = {};
+    const culledPerSequence: Record<string, number> = {};
+    const emptyPerSequence: Record<string, number> = {};
+    let frameTotal = 0;
     for (const spec of wanted) {
       console.log(`recording ${spec.id} (${spec.split}, ${spec.timeOfDay}, density ${spec.density})`);
-      let recorded: { frames: CorpusFrame[]; pngs: string[] } | null = null;
+      let recorded: { frames: CorpusFrame[]; pngs: string[]; culled?: RecordedSequence["culled"] } | null =
+        null;
       let lastError: unknown;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -246,17 +258,46 @@ async function main() {
       }
       if (!recorded) throw lastError;
       const frames = recorded.frames as CorpusFrame[];
-      const typed: RecordedSequence = { id: spec.id, frames, pngs: recorded.pngs };
+      const typed: RecordedSequence = {
+        id: spec.id,
+        frames,
+        pngs: recorded.pngs,
+        culled: recorded.culled ?? [],
+      };
       writeSequence(args.out, typed, spec);
       const boxes = frames.reduce((n, frame) => n + frame.objects.length, 0);
       const counts = classCounts(frames);
       perSequence[spec.id] = counts;
       for (const key of Object.keys(totals) as (keyof ClassCounts)[]) totals[key] += counts[key];
-      console.log(`  ${frames.length} frames, ${boxes} boxes ${JSON.stringify(counts)}`);
+      culledPerSequence[spec.id] = (typed.culled ?? []).reduce((n, list) => n + list.length, 0);
+      emptyPerSequence[spec.id] = frames.filter((frame) => frame.objects.length === 0).length;
+      frameTotal += frames.length;
+      console.log(
+        `  ${frames.length} frames, ${boxes} boxes ${JSON.stringify(counts)}, culled persons ${culledPerSequence[spec.id]}, empty frames ${emptyPerSequence[spec.id]}`,
+      );
       if (!sample && spec.split === "train") sample = typed;
     }
     if (sample && !append) writeSample(args.sample, sample);
-    writeFileSync(join(args.out, "class-counts.json"), JSON.stringify({ totals, perSequence }, null, 2));
+    const sum = (rec: Record<string, number>) => Object.values(rec).reduce((n, v) => n + v, 0);
+    writeFileSync(
+      join(args.out, "class-counts.json"),
+      JSON.stringify(
+        {
+          totals,
+          perSequence,
+          frames: frameTotal,
+          emptyFrames: { total: sum(emptyPerSequence), perSequence: emptyPerSequence },
+          culledPersons: {
+            minPersonPx: MIN_PERSON_PX,
+            rule: "person box dropped when min(w, h) < minPersonPx at 960x540 capture",
+            total: sum(culledPerSequence),
+            perSequence: culledPerSequence,
+          },
+        },
+        null,
+        2,
+      ),
+    );
     console.log(`class counts ${JSON.stringify(totals)}`);
   } finally {
     await browser?.close();

@@ -6,6 +6,7 @@ import {
   agentLane,
   agentTrackId,
   agentZone,
+  riderTrackId,
   type AgentType,
 } from "./agents.ts";
 import { DEBRIS_TYPE_LABEL, type DebrisDef, type DebrisKind } from "./debris.ts";
@@ -73,6 +74,8 @@ export type CorpusObject = {
    * debris omit it so their records are unchanged.
    */
   zone?: string | null;
+  /** Rider person boxes only: track id of the bicycle or motor they ride. */
+  riding?: string;
 };
 
 export type CorpusFrame = {
@@ -302,6 +305,77 @@ export function agentRecord(
   };
 }
 
+/**
+ * The person on a bicycle, scooter, or motorbike, as its own `person` box.
+ * The vehicle keeps its own box (rider included) from `agentRecord`; this
+ * one covers the rider's body only and links back through `riding`.
+ */
+export function riderRecord(
+  agent: AgentPose & { type: Exclude<AgentType, "person"> },
+  corners: readonly Vec3[],
+  camera: THREE.Camera,
+  width: number,
+  height: number,
+): CorpusObject | null {
+  const bbox = projectBox(camera, corners, width, height);
+  if (!bbox) return null;
+  return {
+    trackId: riderTrackId(agent),
+    class: "person",
+    type: "person",
+    kind: null,
+    laneId: agentLane(agent),
+    position: { x: agent.x, y: 0, z: agent.z },
+    speed: agent.v,
+    bbox,
+    zone: agentZone(agent),
+    riding: agentTrackId(agent),
+  };
+}
+
+/**
+ * Every label one agent contributes: its own box, plus a separate `person`
+ * box for the rider when it is a bicycle, scooter, or motorbike. The rider
+ * box is only kept next to its vehicle box, so `riding` always resolves.
+ */
+export function agentLabels(
+  agent: AgentPose,
+  bodyCorners: readonly Vec3[],
+  riderCorners: readonly Vec3[] | null,
+  camera: THREE.Camera,
+  width: number,
+  height: number,
+): CorpusObject[] {
+  const body = agentRecord(agent, bodyCorners, camera, width, height);
+  if (!body) return [];
+  if (agent.type === "person" || !riderCorners || riderCorners.length === 0) return [body];
+  const rider = riderRecord({ ...agent, type: agent.type }, riderCorners, camera, width, height);
+  return rider ? [body, rider] : [body];
+}
+
+/**
+ * Smallest person box the corpus keeps, in capture pixels (960×540), on the
+ * shorter side. Edge trains at 1280 px, so 6 px here is 8 px at train time,
+ * about the floor where a YOLOv8n stride-8 head still has a cell on the
+ * target. A 120 m nadir pedestrian is 1.3–2 px and a 60 m one 3–6 px; both
+ * were labels the detector could never learn from.
+ */
+export const MIN_PERSON_PX = 6;
+
+/** Drop person boxes under `minPx` on their shorter side. Other classes pass through. */
+export function cullSmallPersons(
+  objects: readonly CorpusObject[],
+  minPx: number = MIN_PERSON_PX,
+): { kept: CorpusObject[]; culled: CorpusObject[] } {
+  const kept: CorpusObject[] = [];
+  const culled: CorpusObject[] = [];
+  for (const obj of objects) {
+    if (obj.class === "person" && Math.min(obj.bbox.w, obj.bbox.h) < minPx) culled.push(obj);
+    else kept.push(obj);
+  }
+  return { kept, culled };
+}
+
 export type ClassCounts = Record<LabelClass, number>;
 
 export function classCounts(frames: readonly CorpusFrame[]): ClassCounts {
@@ -436,6 +510,10 @@ export function validateFrame(frame: CorpusFrame): string[] {
       if (obj.speed === null || !Number.isFinite(obj.speed) || obj.speed < 0) errors.push("speed");
       if (obj.laneId !== null && obj.laneId.length === 0) errors.push("lane");
       if (obj.zone !== undefined && obj.zone !== null && obj.zone.length === 0) errors.push("zone");
+      if (obj.riding !== undefined) {
+        if (obj.class !== "person") errors.push("riding class");
+        if (!frame.objects.some((other) => other.trackId === obj.riding)) errors.push("riding track");
+      }
     } else {
       errors.push("class");
     }

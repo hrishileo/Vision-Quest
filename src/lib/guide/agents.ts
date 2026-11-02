@@ -270,11 +270,23 @@ export const AGENT_COUNTS = {
   motorbike: 2,
 } as const;
 
-/** Deterministic VRU spawn. `density` scales counts the same way as the car fleet. */
-export function spawnAgents(seed: number, density: number): SimAgent[] {
+export type AgentCounts = { [K in keyof typeof AGENT_COUNTS]: number };
+
+/**
+ * Deterministic VRU spawn. `density` scales counts the same way as the car
+ * fleet. `counts` replaces the base counts per group (a sequence that wants a
+ * crosswalk crowd or a bike-heavy curb lane); density still scales them.
+ */
+export function spawnAgents(
+  seed: number,
+  density: number,
+  counts?: Partial<AgentCounts>,
+): SimAgent[] {
   const rng = mulberry32((seed ^ 0x5bd1e995) >>> 0);
   const scale = Number.isFinite(density) ? Math.min(2, Math.max(0, density)) : 1;
-  const count = (n: number) => (scale <= 0 ? 0 : Math.max(1, Math.round(n * scale)));
+  const base: AgentCounts = { ...AGENT_COUNTS, ...counts };
+  const count = (n: number) =>
+    scale <= 0 || n <= 0 ? 0 : Math.max(1, Math.round(n * scale));
   const agents: SimAgent[] = [];
   let id = 0;
   const walker = (
@@ -308,7 +320,7 @@ export function spawnAgents(seed: number, density: number): SimAgent[] {
 
   const loop = crosswalkLoop();
   const sides = loop.path.length;
-  for (let i = 0; i < count(AGENT_COUNTS.crossers); i++) {
+  for (let i = 0; i < count(base.crossers); i++) {
     const seg = Math.floor(rng() * sides);
     // Start on the corner side so nobody spawns mid-crossing against a red.
     walker(loop.path, true, loop.crossings, seg, 0, 1);
@@ -322,7 +334,7 @@ export function spawnAgents(seed: number, density: number): SimAgent[] {
       walks.push({ fixed: sz, axis: "x", sign: sx, start: MICH_CURB + 3 });
     }
   }
-  for (let i = 0; i < count(AGENT_COUNTS.strollers); i++) {
+  for (let i = 0; i < count(base.strollers); i++) {
     const w = walks[Math.floor(rng() * walks.length)]!;
     const curb = w.axis === "z" ? MICH_CURB : CHI_CURB;
     const off = w.fixed * (curb + 2.8 + rng() * (SIDEWALK_W - 4.0));
@@ -334,9 +346,9 @@ export function spawnAgents(seed: number, density: number): SimAgent[] {
   }
 
   const riders: { type: AgentType; v0: () => number; n: number }[] = [
-    { type: "bicycle", v0: () => 4 + rng() * 1.6, n: count(AGENT_COUNTS.bicycle) },
-    { type: "scooter", v0: () => 3.4 + rng() * 1.4, n: count(AGENT_COUNTS.scooter) },
-    { type: "motorbike", v0: () => 6.5 + rng() * 2, n: count(AGENT_COUNTS.motorbike) },
+    { type: "bicycle", v0: () => 4 + rng() * 1.6, n: count(base.bicycle) },
+    { type: "scooter", v0: () => 3.4 + rng() * 1.4, n: count(base.scooter) },
+    { type: "motorbike", v0: () => 6.5 + rng() * 2, n: count(base.motorbike) },
   ];
   const placed: { laneId: string; s: number; len: number }[] = [];
   for (const group of riders) {
@@ -379,6 +391,56 @@ export function spawnAgents(seed: number, density: number): SimAgent[] {
     }
   }
   return agents;
+}
+
+/** Riders: every bicycle, scooter, and motorbike carries one. */
+export function hasRider(agent: Pick<SimAgent, "type">): boolean {
+  return agent.type !== "person";
+}
+
+/**
+ * Track id of the person riding an agent. Derived from the agent id, so it
+ * persists for as long as the rig does, and it never collides with a
+ * pedestrian's `ped-<id>`.
+ */
+export function riderTrackId(agent: Pick<SimAgent, "id">): string {
+  return `ped-rider-${agent.id}`;
+}
+
+/**
+ * Seated or standing rider on each rig, in rig-local metres: feet height,
+ * head height, and how far the body sits behind the rig centre. Mirrors
+ * `makeAgentRig` in build-world.ts.
+ */
+export const RIDER_POSE: Record<Exclude<AgentType, "person">, { feet: number; top: number; back: number }> = {
+  bicycle: { feet: 0.62, top: 1.72, back: 0.12 },
+  scooter: { feet: 0.17, top: 1.78, back: 0.08 },
+  motorbike: { feet: 0.8, top: 1.5, back: 0.2 },
+};
+
+const RIDER_FOOTPRINT = { length: 0.56, width: 0.46 };
+
+/** Oriented box corners of the rider alone. Empty for pedestrians. */
+export function riderCorners(
+  agent: Pick<SimAgent, "x" | "z" | "yaw" | "type">,
+): { x: number; y: number; z: number }[] {
+  if (agent.type === "person") return [];
+  const pose = RIDER_POSE[agent.type];
+  const fx = Math.sin(agent.yaw);
+  const fz = Math.cos(agent.yaw);
+  const rx = Math.cos(agent.yaw);
+  const rz = -Math.sin(agent.yaw);
+  const hl = RIDER_FOOTPRINT.length * 0.5;
+  const hw = RIDER_FOOTPRINT.width * 0.5;
+  const out: { x: number; y: number; z: number }[] = [];
+  for (const y of [pose.feet, pose.top]) {
+    for (const a of [-pose.back - hl, -pose.back + hl]) {
+      for (const w of [-hw, hw]) {
+        out.push({ x: agent.x + fx * a + rx * w, y, z: agent.z + fz * a + rz * w });
+      }
+    }
+  }
+  return out;
 }
 
 export function agentClass(agent: Pick<SimAgent, "type">): AgentClass {

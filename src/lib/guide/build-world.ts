@@ -137,6 +137,7 @@ function makeAgentRig(kit: AgentKit, agent: SimAgent): THREE.Group {
     const rider = figure(kit, shirt, 0.62, size.height, true);
     rider.position.z = -0.12;
     rider.rotation.x = 0.25;
+    rider.userData.rider = true;
     g.add(rider);
   } else if (agent.type === "scooter") {
     const r = 0.1;
@@ -146,6 +147,7 @@ function makeAgentRig(kit: AgentKit, agent: SimAgent): THREE.Group {
     g.add(part(kit, kit.frame, size.width, 0.04, 0.05, 0, 1.08, hl - 0.14));
     const rider = figure(kit, shirt, 0.17, size.height, false);
     rider.position.z = -0.08;
+    rider.userData.rider = true;
     g.add(rider);
   } else {
     const r = 0.32;
@@ -154,6 +156,7 @@ function makeAgentRig(kit: AgentKit, agent: SimAgent): THREE.Group {
     g.add(part(kit, kit.frame, size.width, 0.04, 0.05, 0, 1.0, hl - 0.4));
     const rider = figure(kit, kit.frame, 0.8, size.height, true);
     rider.position.z = -0.2;
+    rider.userData.rider = true;
     g.add(rider);
   }
   g.userData.agent = true;

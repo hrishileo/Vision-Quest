@@ -49,7 +49,8 @@ import {
   CORPUS_HEIGHT,
   CORPUS_WIDTH,
   CorpusSession,
-  agentRecord,
+  agentLabels,
+  cullSmallPersons,
   assertRoadInView,
   cameraRecord,
   debrisRecord,
@@ -192,6 +193,8 @@ export class GuideEngine {
   private corpusPixels: Uint8Array | null = null;
   private corpusBox = new THREE.Box3();
   private corpusCorners = Array.from({ length: 8 }, () => new THREE.Vector3());
+  /** Person boxes under `MIN_PERSON_PX`, one list per sampled frame. Not labels; kept for the audit. */
+  private corpusCulled: CorpusObject[][] = [];
   private corpusNdc = new THREE.Vector3();
   private corpusTo = new THREE.Vector3();
   private corpusSample = new THREE.Vector3();
@@ -1814,7 +1817,7 @@ export class GuideEngine {
   /** Headless clip. The animation loop stays paused so the scripted pose is the one recorded. */
   async recordSequence(
     spec: SequenceSpec,
-  ): Promise<{ id: string; frames: CorpusFrame[]; pngs: string[] }> {
+  ): Promise<{ id: string; frames: CorpusFrame[]; pngs: string[]; culled: CorpusObject[][] }> {
     const guide = useGuide.getState();
     const wasPaused = guide.paused;
     let prevFar = this.drone.droneCam.far;
@@ -1838,7 +1841,13 @@ export class GuideEngine {
       if (spec.topDown) cam.far = Math.max(prevFar, spec.altitude * 2.5);
       cam.updateProjectionMatrix();
 
-      this.world.sim.reset(spec.seed, spec.density);
+      this.world.sim.reset(spec.seed, spec.density, spec.agents);
+      if (spec.empty) {
+        // Negative frames: the street with nobody on it.
+        this.world.sim.cars = [];
+        this.world.sim.agents = [];
+        for (const rig of this.world.debris) rig.group.visible = false;
+      }
       syncWorldCars(this.world);
       this.world.sim.blocks = spec.blockades.map((block) => ({
         laneId: block.laneId,
@@ -1852,6 +1861,7 @@ export class GuideEngine {
       applySignalLights(this.world.signals, this.world.sim.nsLit, this.world.sim.ewLit);
 
       this.corpus.start(spec.hz);
+      this.corpusCulled = [];
       const frameSteps = Math.max(1, Math.round(1 / spec.hz / SIM_STEP));
       const pngs: Promise<Uint8Array>[] = [];
       for (let i = 0; i < spec.frames; i++) {
@@ -1891,10 +1901,17 @@ export class GuideEngine {
         id: spec.id,
         frames,
         pngs: encoded.map((bytes) => bytesToBase64(bytes)),
+        culled: this.corpusCulled.slice(0, frames.length),
       };
     } finally {
       this.drone.droneCam.far = prevFar;
       this.drone.droneCam.updateProjectionMatrix();
+      if (spec.empty) {
+        // Put the street back so the live pursuit never runs without a subject car.
+        for (const rig of this.world.debris) rig.group.visible = true;
+        this.world.sim.reset(spec.seed, 1);
+        syncWorldCars(this.world);
+      }
       this.corpus.stop();
       this.scripted = false;
       this.scriptedTod = null;
@@ -1957,6 +1974,7 @@ export class GuideEngine {
     }
     const debris = [...this.world.debris].sort((a, b) => a.id - b.id);
     for (const rig of debris) {
+      if (!rig.group.visible) continue;
       const box = this.corpusBox.setFromObject(rig.group);
       if (box.isEmpty()) continue;
       box.getCenter(this.corpusSample);
@@ -1994,10 +2012,21 @@ export class GuideEngine {
         continue;
       }
       writeBoxCorners(this.corpusBox.setFromObject(rig.group), this.corpusCorners);
-      const rec = agentRecord(agent, this.corpusCorners, cam, CORPUS_WIDTH, CORPUS_HEIGHT);
-      if (rec) objects.push(rec);
+      const bodyCorners = this.corpusCorners.map((c) => ({ x: c.x, y: c.y, z: c.z }));
+      // The rider gets its own person box, measured off the rendered figure.
+      const figure = rig.group.children.find((child) => child.userData.rider === true);
+      let riderCorners: { x: number; y: number; z: number }[] | null = null;
+      if (figure) {
+        writeBoxCorners(this.corpusBox.setFromObject(figure), this.corpusCorners);
+        riderCorners = this.corpusCorners.map((c) => ({ x: c.x, y: c.y, z: c.z }));
+      }
+      objects.push(
+        ...agentLabels(agent, bodyCorners, riderCorners, cam, CORPUS_WIDTH, CORPUS_HEIGHT),
+      );
     }
-    return objects;
+    const { kept, culled } = cullSmallPersons(objects);
+    this.corpusCulled.push(culled);
+    return kept;
   }
 
   private sampleCorpusFrame(): Promise<Uint8Array> | null {

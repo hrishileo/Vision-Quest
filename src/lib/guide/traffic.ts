@@ -3,6 +3,7 @@ import {
   CAR_L,
   CAR_W,
   LANES,
+  LANE_W,
   MAG_MILE,
   PARK_X,
   PARK_Z,
@@ -16,7 +17,14 @@ import {
   wrapS,
   type LaneDef,
 } from "./city.ts";
-import { spawnAgents, stepAgents, type AgentSignals, type SimAgent } from "./agents.ts";
+import {
+  AGENT_SIZE,
+  spawnAgents,
+  stepAgents,
+  type AgentCounts,
+  type AgentSignals,
+  type SimAgent,
+} from "./agents.ts";
 
 const A_MAX = 1.45;
 const B_COM = 2.15;
@@ -27,6 +35,17 @@ const STEP = 1 / 30;
 export const SIM_STEP = STEP;
 const CYCLE = 64;
 const CAR_LEN_PAD = CAR_L;
+/** How far ahead a car looks for a rider in its lane, metres. */
+const RIDER_LOOKAHEAD = 60;
+/** Standstill gap a car keeps behind a rider, metres. */
+const RIDER_S0 = 1.5;
+/**
+ * Lateral room a car needs to pass a rider inside the lane (about the 3 ft
+ * passing rule). Curb-lane riders leave ~0.1 m, so cars follow them.
+ */
+export const RIDER_PASS_CLEARANCE = 0.9;
+
+type RiderAhead = { s: number; v: number; length: number };
 
 const PALETTE = [
   0xc5c8ce, 0x3a3e44, 0x5c6460, 0xb8bcc2, 0x2c3238, 0x6a5040, 0x4a5560, 0x8a7a68, 0x3e4840,
@@ -225,7 +244,7 @@ export class TrafficSim {
     this.reset(seed);
   }
 
-  reset(seed = Date.now(), density = 1) {
+  reset(seed = Date.now(), density = 1, agentCounts?: Partial<AgentCounts>) {
     const scale = Number.isFinite(density) ? Math.min(2, Math.max(0, density)) : 1;
     this.density = scale;
     this.rng = mulberry32(seed >>> 0);
@@ -236,7 +255,7 @@ export class TrafficSim {
     this.links = [];
     this.syncSignals();
     this.spawn();
-    this.agents = spawnAgents(seed >>> 0, scale);
+    this.agents = spawnAgents(seed >>> 0, scale, agentCounts);
   }
 
   /** Replace the fleet. Used by the detour scenario; the default pursuit spawn does not call this. */
@@ -425,6 +444,7 @@ export class TrafficSim {
       list.push(c);
       groups.set(c.laneId, list);
     }
+    const riders = this.ridersByLane();
     for (const [laneId, list] of groups) {
       const lane = laneById(laneId);
       if (!lane) continue;
@@ -432,7 +452,7 @@ export class TrafficSim {
       for (let i = 0; i < list.length; i++) {
         const car = list[i]!;
         const leader = lane.finite ? (list[i + 1] ?? null) : list[(i + 1) % list.length]!;
-        this.follow(car, leader, lane, dt);
+        this.follow(car, leader, lane, dt, riders.get(laneId));
       }
     }
     for (const c of this.cars) poseCar(c);
@@ -457,7 +477,50 @@ export class TrafficSim {
     },
   };
 
-  private follow(car: SimCar, leader: SimCar | null, lane: LaneDef, dt: number) {
+  /**
+   * Riders that block a car's lane: same lane id and too close to the lane
+   * line for a car to pass inside the lane.
+   */
+  private ridersByLane(): Map<string, RiderAhead[]> {
+    const out = new Map<string, RiderAhead[]>();
+    for (const agent of this.agents) {
+      if (!agent.laneId || agent.type === "person") continue;
+      const lane = laneById(agent.laneId);
+      if (!lane) continue;
+      const size = AGENT_SIZE[agent.type];
+      const lateral = Math.abs(
+        lane.axis === "z" ? agent.x - lane.offset : agent.z - lane.offset,
+      );
+      // Off the lane entirely, or far enough to the side to pass without leaving the lane.
+      if (lateral - size.width * 0.5 > LANE_W * 0.5) continue;
+      const clearance = lateral - size.width * 0.5 - CAR_W * 0.5;
+      if (clearance >= RIDER_PASS_CLEARANCE) continue;
+      const list = out.get(agent.laneId) ?? [];
+      list.push({ s: agent.s, v: agent.v, length: size.length });
+      out.set(agent.laneId, list);
+    }
+    return out;
+  }
+
+  private riderAhead(car: SimCar, lane: LaneDef, riders: RiderAhead[] | undefined) {
+    if (!riders) return null;
+    let best: { ds: number; rider: RiderAhead } | null = null;
+    for (const rider of riders) {
+      let ds = rider.s - car.s;
+      if (ds <= 0.08 && !lane.finite) ds += lane.length;
+      if (ds <= 0.08 || ds > RIDER_LOOKAHEAD) continue;
+      if (!best || ds < best.ds) best = { ds, rider };
+    }
+    return best;
+  }
+
+  private follow(
+    car: SimCar,
+    leader: SimCar | null,
+    lane: LaneDef,
+    dt: number,
+    riders?: RiderAhead[],
+  ) {
     const stalled = car.subject && this.time < car.stallUntil;
     let v0 = stalled ? 0.02 : car.v0;
     if (car.subject && !stalled && this.time >= car.nextStall) {
@@ -504,6 +567,15 @@ export class TrafficSim {
       }
     }
 
+    const rider = this.riderAhead(car, lane, riders);
+    if (rider) {
+      const riderGap = rider.ds - (car.length + rider.rider.length) * 0.5 - (RIDER_S0 - S0);
+      if (riderGap < gap) {
+        gap = riderGap;
+        vLead = rider.rider.v;
+      }
+    }
+
     const block = this.blockAhead(lane.id, car.s);
     if (block) {
       const stopGap = block.s0 - car.s - car.length * 0.5 - 0.5;
@@ -526,6 +598,13 @@ export class TrafficSim {
       if (next > maxS) {
         next = maxS;
         car.v = Math.min(car.v, vLead);
+      }
+    }
+    if (rider) {
+      const maxS = car.s + rider.ds - (car.length + rider.rider.length) * 0.5 - RIDER_S0;
+      if (next > maxS) {
+        next = Math.max(car.s, maxS);
+        car.v = Math.min(car.v, rider.rider.v);
       }
     }
     if (lane.signal !== false && !pastStop && lit !== "g") {

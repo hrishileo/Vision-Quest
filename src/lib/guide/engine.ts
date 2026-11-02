@@ -1814,6 +1814,12 @@ export class GuideEngine {
     this.addedDebris = addLaneBlockades(this.world, defs);
   }
 
+  private setRoadUsersVisible(visible: boolean) {
+    for (const rig of this.world.cars) rig.group.visible = visible;
+    for (const rig of this.world.agents) rig.group.visible = visible;
+    for (const rig of this.world.debris) rig.group.visible = visible;
+  }
+
   /** Headless clip. The animation loop stays paused so the scripted pose is the one recorded. */
   async recordSequence(
     spec: SequenceSpec,
@@ -1842,12 +1848,6 @@ export class GuideEngine {
       cam.updateProjectionMatrix();
 
       this.world.sim.reset(spec.seed, spec.density, spec.agents);
-      if (spec.empty) {
-        // Negative frames: the street with nobody on it.
-        this.world.sim.cars = [];
-        this.world.sim.agents = [];
-        for (const rig of this.world.debris) rig.group.visible = false;
-      }
       syncWorldCars(this.world);
       this.world.sim.blocks = spec.blockades.map((block) => ({
         laneId: block.laneId,
@@ -1888,6 +1888,9 @@ export class GuideEngine {
           cam.aspect = viewAspect;
           cam.updateProjectionMatrix();
         }
+        // Negative frames: the fleet keeps driving (the live loop needs a subject car)
+        // but every road user and debris rig is hidden, and hidden rigs are never labeled.
+        if (spec.empty) this.setRoadUsersVisible(false);
         const png = this.sampleCorpusFrame();
         if (!png) throw new Error(`corpus frame ${i} did not render`);
         pngs.push(png);
@@ -1906,12 +1909,7 @@ export class GuideEngine {
     } finally {
       this.drone.droneCam.far = prevFar;
       this.drone.droneCam.updateProjectionMatrix();
-      if (spec.empty) {
-        // Put the street back so the live pursuit never runs without a subject car.
-        for (const rig of this.world.debris) rig.group.visible = true;
-        this.world.sim.reset(spec.seed, 1);
-        syncWorldCars(this.world);
-      }
+      if (spec.empty) this.setRoadUsersVisible(true);
       this.corpus.stop();
       this.scripted = false;
       this.scriptedTod = null;
@@ -1955,7 +1953,7 @@ export class GuideEngine {
     const cars = [...this.world.sim.cars].sort((a, b) => a.id - b.id);
     for (const car of cars) {
       const rig = this.world.cars.find((item) => item.id === car.id);
-      if (!rig) continue;
+      if (!rig || !rig.group.visible) continue;
       if (
         !isVisibleInCamera(
           cam,
@@ -1998,7 +1996,7 @@ export class GuideEngine {
     const agents = [...this.world.sim.agents].sort((a, b) => a.id - b.id);
     for (const agent of agents) {
       const rig = this.world.agents.find((item) => item.id === agent.id);
-      if (!rig) continue;
+      if (!rig || !rig.group.visible) continue;
       if (
         !isVisibleInCamera(
           cam,

@@ -65,3 +65,9 @@ Notes for the 2026-11-03 bike run 3 rows:
 - Run 3 does not beat run 2 on people or bikes. People are 1 lower in every setting (tiled 26 against 27, full 1280 26 against 27, full 640 19 against 20). Bikes at the 0.25 cutoff: tiled 2 against 3, full 1280 0 against 1, full 640 1 against 1. Tiled at 0.05 both runs find 4 of 8 bikes (run 3 draws 30 bike boxes, run 2 33).
 - Vehicles improved: tiled finds 52 against 49 with 11 vehicle boxes on nothing against 18; full 640 has 4 boxes on nothing against 8. Motor tiled is 15 against 16.
 - Kaggle validation mAP50 (200 held-out val images) is 0.618 for run 3 against 0.626 for run 2; bicycle mAP50 0.298 against 0.316.
+
+Note added 2026-11-03 (weights split, Jarvis's decision after the run 3 diagnosis):
+- Vehicle and lane events use run 3 weights (bike_run3.pt). Person and bicycle detection stays on run 2 weights (bike_run2.pt). Each job loads its own model.
+- Why run 3 for vehicles: it draws fewer vehicle boxes on nothing, the error that can close a lane or fire a reroute for drivers. Tiled it drops from 18 (run 2) to 11, and on full frames at 640 px from 8 to 4, while finding as many or more vehicles (tiled 52 against 49 of 59).
+- Why run 2 stays for people and bikes: run 3 is 1 person and up to 1 bike lower, and the misses are explained by a mismatch between the test frames and the Sim data, not by the training setup. 7 of the 8 test bikes are parked with no rider, while every sampled Sim bike has a rider and is smaller (about 15 px against about 38 px for the missed real bikes). Most missed people are riders that VisDrone labels as their own person box, but the model merges the rider into the bicycle or motor box. Sim frames made no measurable difference to people (tiled 26, 27, 26 for runs 1, 2, 3; run 1 had no Sim frames).
+- With 8 bikes and 34 people in the 10-frame set, one object decides a result. The larger held-out test set rows below are the check on this split.

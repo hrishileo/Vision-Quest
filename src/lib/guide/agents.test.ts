@@ -6,12 +6,23 @@ import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import {
   AGENT_SIZE,
+  FACADE_PROBE_X,
+  PARKED_BIKE_SIZE,
+  PARK_KINDS,
+  RACK_SIZE,
   agentCorners,
+  hasRider,
   riderCorners,
   spawnAgents,
   type SimAgent,
 } from "./agents.ts";
-import { pointInBuilding } from "./city.ts";
+import {
+  CAR_L,
+  CAR_W,
+  CURB_PARKING,
+  pointInBuilding,
+  zoneAt,
+} from "./city.ts";
 import { HORIZON_TILT_TRIAL, recordLabels } from "./closed-loop.ts";
 import {
   CORPUS_HEIGHT,
@@ -554,5 +565,130 @@ describe("cars yield to riders", () => {
       }
       assert.ok(followed > 0, `seed ${seed}: some car ends up following a rider`);
     }
+  });
+});
+
+describe("parked riderless bicycles", () => {
+  const PARKED = { crossers: 0, strollers: 0, bicycle: 0, scooter: 0, motorbike: 0, parked: 15 };
+
+  it("adds no parked bikes by default and never moves an existing walker or rider", () => {
+    for (const seed of [11, 211, 307]) {
+      const base = spawnAgents(seed, 1);
+      assert.equal(base.filter((a) => a.parked).length, 0);
+      const withParked = spawnAgents(seed, 1, { parked: 10 });
+      assert.deepEqual(withParked.slice(0, base.length), base);
+      assert.ok(withParked.length > base.length);
+    }
+  });
+
+  it("covers every park kind with a rack of four, all on sidewalk and clear of cars and buildings", () => {
+    const bikes = spawnAgents(307, 1, PARKED);
+    const kinds = new Map<string, number>();
+    for (const b of bikes) {
+      assert.equal(b.type, "bicycle");
+      assert.equal(b.laneId, null);
+      assert.equal(b.v, 0);
+      kinds.set(b.parked!, (kinds.get(b.parked!) ?? 0) + 1);
+      assert.match(zoneAt(b.x, b.z) ?? "", /^walk-mich-/, `${b.parked} at ${b.x},${b.z}`);
+      assert.ok(!pointInBuilding(b.x, b.z, 0.4));
+      for (const c of CURB_PARKING) {
+        assert.ok(
+          Math.abs(b.x - c.x) >= CAR_W / 2 || Math.abs(b.z - c.z) >= CAR_L / 2,
+          `${b.parked} bike inside parked car at ${c.x},${c.z}`,
+        );
+      }
+    }
+    for (const kind of PARK_KINDS) assert.ok((kinds.get(kind) ?? 0) > 0, kind);
+    assert.equal((kinds.get("rack") ?? 0) % RACK_SIZE, 0);
+    // Rack bikes stand close enough that an oblique view overlaps them.
+    const rack = bikes.filter((b) => b.parked === "rack").slice(0, RACK_SIZE);
+    for (let i = 1; i < rack.length; i++) {
+      const d = Math.hypot(rack[i]!.x - rack[i - 1]!.x, rack[i]!.z - rack[i - 1]!.z);
+      assert.ok(d < PARKED_BIKE_SIZE.width * 1.25, `rack gap ${d.toFixed(2)} m`);
+    }
+    // Facade bikes sit against a building, where its shade falls under a low sun.
+    for (const b of bikes.filter((x) => x.parked === "facade")) {
+      assert.ok(pointInBuilding(Math.sign(b.x) * FACADE_PROBE_X, b.z));
+    }
+  });
+
+  it("keeps a clip's parked bikes inside its park window and on its side", () => {
+    for (const spec of SEQUENCES.filter((seq) => seq.park)) {
+      const park = spec.park!;
+      const bikes = spawnAgents(spec.seed, spec.density, spec.agents, park).filter((a) => a.parked);
+      assert.ok(bikes.length >= 10, `${spec.id}: ${bikes.length} parked`);
+      const kinds = new Set(bikes.map((b) => b.parked));
+      assert.ok(kinds.has("rack") && kinds.has("open") && kinds.has("facade"), `${spec.id} ${[...kinds]}`);
+      for (const b of bikes) {
+        // Car spots ride with their stall, up to 1.6 m past it.
+        const slack = b.parked === "car" ? 3.8 : b.parked === "rack" ? 2.2 : 1.0;
+        assert.ok(b.z >= park.z[0] - slack && b.z <= park.z[1] + slack, `${spec.id} ${b.parked} z ${b.z}`);
+        if (park.side) assert.equal(Math.sign(b.x), park.side, `${spec.id} ${b.parked}`);
+      }
+    }
+  });
+
+  it("labels a parked bike as one bicycle box with no rider box, next to riders that keep theirs", () => {
+    const [moving] = spawnAgents(1, 1, { crossers: 0, strollers: 0, bicycle: 1, scooter: 0, motorbike: 0 });
+    const parked = spawnAgents(307, 1, PARKED);
+    for (const b of parked) {
+      assert.equal(hasRider(b), false);
+      assert.deepEqual(riderCorners(b), []);
+    }
+    assert.ok(moving && hasRider(moving));
+    let boxed = 0;
+    for (const zc of [-50, -25, 25, 50]) {
+      const camera = nadirCamera(0, 30, zc, 0);
+      const objects = agentLabelsRaw(parked, camera);
+      for (const obj of objects) {
+        assert.equal(obj.class, "bicycle");
+        assert.equal(obj.riding, undefined);
+        assert.equal(obj.speed, 0);
+        boxed += 1;
+      }
+      const near = { ...moving, x: 0, z: zc };
+      const riderLabels = agentLabelsRaw([near], camera);
+      assert.deepEqual(
+        riderLabels.map((o) => o.class),
+        ["bicycle", "person"],
+      );
+    }
+    assert.ok(boxed >= 10, `${boxed} parked bike boxes`);
+  });
+
+  it("boxes parked bikes at 25–45 px in a 30 m nadir frame, smaller than a ridden bike's box", () => {
+    const parked = spawnAgents(307, 1, PARKED);
+    const sizes: number[] = [];
+    for (const zc of [-50, -25, 25, 50]) {
+      for (const obj of agentLabelsRaw(parked, nadirCamera(0, 30, zc, 0))) {
+        const b = obj.bbox;
+        // Boxes clipped by the frame edge are not the bike's size.
+        if (b.x < 1 || b.y < 1 || b.x + b.w > CORPUS_WIDTH - 1 || b.y + b.h > CORPUS_HEIGHT - 1) continue;
+        sizes.push(Math.max(b.w, b.h));
+      }
+    }
+    sizes.sort((a, b) => a - b);
+    const median = sizes[Math.floor(sizes.length / 2)]!;
+    assert.ok(median >= 25 && median <= 45, `median ${median.toFixed(1)} px`);
+    assert.ok(sizes[0]! >= 20, `min ${sizes[0]!.toFixed(1)} px`);
+    const parkedCorners = agentCorners(parked[0]!);
+    const riddenCorners = agentCorners({ ...parked[0]!, parked: undefined });
+    assert.ok(
+      Math.max(...parkedCorners.map((c) => c.y)) < Math.max(...riddenCorners.map((c) => c.y)),
+    );
+  });
+
+  it("parked bikes stay put while traffic runs and cars never queue behind them", () => {
+    const sim = new TrafficSim(313);
+    sim.reset(313, 0.9, { parked: 12 });
+    const parked = sim.agents.filter((a) => a.parked);
+    assert.ok(parked.length >= 12);
+    const start = parked.map((a) => [a.x, a.z, a.yaw]);
+    sim.advance(20 * 30);
+    assert.deepEqual(
+      parked.map((a) => [a.x, a.z, a.yaw]),
+      start,
+    );
+    assert.ok(sim.cars.some((c) => !c.parked && c.v > 3), "moving traffic is not blocked");
   });
 });

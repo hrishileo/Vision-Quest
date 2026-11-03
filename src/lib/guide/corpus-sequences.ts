@@ -1,4 +1,4 @@
-import type { AgentCounts } from "./agents.ts";
+import type { AgentCounts, ParkWindow } from "./agents.ts";
 import type { CorpusFrame, CorpusObject } from "./corpus.ts";
 import { laneById, laneIdAt, lanePose } from "./city.ts";
 import type { DebrisKind, DebrisType } from "./debris.ts";
@@ -138,6 +138,14 @@ export type SequenceSpec = {
   agents?: Partial<AgentCounts>;
   /** Negative clip: no cars, riders, pedestrians, or debris. Every frame has an empty label file. */
   empty?: boolean;
+  /**
+   * Buildings, cars, and rigs cast sun shadows. Off for every clip before
+   * round 3, so their frames render the same; the parked-bike clips turn it on
+   * so bikes against a building front sit in its shade.
+   */
+  shadows?: boolean;
+  /** Where this clip's parked bikes go, so they land in frame. Default: anywhere on Michigan. */
+  park?: ParkWindow;
 };
 
 /** AGL of the nadir passes, metres. */
@@ -940,6 +948,113 @@ export const SEQUENCES: readonly SequenceSpec[] = [
     blockades: [],
     topDown: true,
     agents: { bicycle: 12, scooter: 4, motorbike: 2 },
+  },
+  // Round 3, from Edge's round 2 miss diagnosis: parked bikes with no rider,
+  // 25–45 px at capture, in rack clusters of four, out in the open, against
+  // building fronts, behind parked cars, and on lamp poles. These clips cast
+  // shadows, so facade bikes on the east walk sit in building shade at noon
+  // and on the west walk at dusk. Moving riders keep their own person boxes.
+  {
+    id: "s32-dawn-top30-parked",
+    split: "train",
+    seed: 307,
+    density: 0.9,
+    timeOfDay: "dawn",
+    ...CLIP,
+    warmupS: 10,
+    altitude: 30,
+    x: 0,
+    z: -30,
+    lookX: 0,
+    lookZ: -60,
+    pitch: 0,
+    roll: 0,
+    driftX: 0,
+    driftZ: 0.5,
+    lookDriftX: 0,
+    lookDriftZ: 0.5,
+    debris: [],
+    blockades: [],
+    topDown: true,
+    agents: { parked: 16 },
+    shadows: true,
+    park: { z: [-50, -14] },
+  },
+  {
+    id: "s33-noon-top30-parked",
+    split: "train",
+    seed: 311,
+    density: 0.9,
+    timeOfDay: "noon",
+    ...CLIP,
+    warmupS: 12,
+    altitude: 30,
+    x: 0,
+    z: 30,
+    lookX: 0,
+    lookZ: 0,
+    pitch: 0,
+    roll: 0,
+    driftX: 0,
+    driftZ: -0.5,
+    lookDriftX: 0,
+    lookDriftZ: -0.5,
+    debris: [],
+    blockades: [],
+    topDown: true,
+    agents: { parked: 16 },
+    shadows: true,
+    park: { z: [14, 50] },
+  },
+  {
+    id: "s34-noon-parked-angled",
+    split: "train",
+    seed: 313,
+    density: 0.9,
+    timeOfDay: "noon",
+    ...CLIP,
+    warmupS: 10,
+    altitude: 18,
+    x: 7,
+    z: 56,
+    lookX: 15,
+    lookZ: 44,
+    pitch: 0,
+    roll: 0.02,
+    driftX: 0,
+    driftZ: -0.8,
+    lookDriftX: 0,
+    lookDriftZ: -0.8,
+    debris: [],
+    blockades: [],
+    agents: { parked: 18 },
+    shadows: true,
+    park: { z: [28, 56], side: 1 },
+  },
+  {
+    id: "s35-dusk-parked-angled-val",
+    split: "val",
+    seed: 317,
+    density: 0.9,
+    timeOfDay: "dusk",
+    ...CLIP,
+    warmupS: 10,
+    altitude: 18,
+    x: -7,
+    z: -56,
+    lookX: -15,
+    lookZ: -44,
+    pitch: 0,
+    roll: -0.02,
+    driftX: 0,
+    driftZ: 0.8,
+    lookDriftX: 0,
+    lookDriftZ: 0.8,
+    debris: [],
+    blockades: [],
+    agents: { parked: 18 },
+    shadows: true,
+    park: { z: [-56, -28], side: -1 },
   },
 ];
 

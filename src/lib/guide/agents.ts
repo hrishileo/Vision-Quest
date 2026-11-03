@@ -1,6 +1,12 @@
 import {
   CHI_CURB,
+  CURB_PARKING,
+  CAR_L,
+  CAR_W,
+  LAMP_XS,
+  LAMP_ZS,
   MICH_CURB,
+  PARK_X,
   SIDEWALK_W,
   SPAN,
   XWALK_X,
@@ -45,6 +51,21 @@ export const AGENT_SIZE: Record<AgentType, { length: number; width: number; heig
   motorbike: { length: 2.1, width: 0.8, height: 1.5 },
 };
 
+/**
+ * A parked bicycle with nobody on it: a rack cluster at the curb, one out in
+ * the open on the sidewalk, one against a building front (in its shade when
+ * the clip casts shadows), one tucked behind a parked car, or one leaned on a lamp
+ * pole. It never moves and never carries a rider box.
+ */
+export type ParkKind = "rack" | "open" | "facade" | "car" | "pole";
+export const PARK_KINDS: readonly ParkKind[] = ["rack", "open", "facade", "car", "pole"];
+
+/** Bike alone, no rider: saddle and bars top out near 1 m. Mirrors the parked rig in build-world.ts. */
+export const PARKED_BIKE_SIZE = { length: 1.75, width: 0.6, height: 1.05 } as const;
+
+/** Bikes in one rack cluster, side by side. Frame 7 of the VisDrone eval has four. */
+export const RACK_SIZE = 4;
+
 type Pt = { x: number; z: number };
 
 export type SimAgent = {
@@ -69,6 +90,8 @@ export type SimAgent = {
   seg: number;
   u: number;
   dir: 1 | -1;
+  /** Set on parked, riderless bicycles. Parked agents never move. */
+  parked?: ParkKind;
 };
 
 export type AgentSignals = {
@@ -219,6 +242,7 @@ function stepRiders(riders: SimAgent[], dt: number, signals: AgentSignals) {
 export function stepAgents(agents: SimAgent[], dt: number, signals: AgentSignals) {
   const riders: SimAgent[] = [];
   for (const agent of agents) {
+    if (agent.parked) continue;
     if (agent.laneId) riders.push(agent);
     else stepWalker(agent, dt, signals);
   }
@@ -268,6 +292,8 @@ export const AGENT_COUNTS = {
   bicycle: 5,
   scooter: 3,
   motorbike: 2,
+  /** Parked riderless bicycle spots. A rack spot holds RACK_SIZE bikes. Off by default. */
+  parked: 0,
 } as const;
 
 export type AgentCounts = { [K in keyof typeof AGENT_COUNTS]: number };
@@ -281,6 +307,7 @@ export function spawnAgents(
   seed: number,
   density: number,
   counts?: Partial<AgentCounts>,
+  park?: ParkWindow,
 ): SimAgent[] {
   const rng = mulberry32((seed ^ 0x5bd1e995) >>> 0);
   const scale = Number.isFinite(density) ? Math.min(2, Math.max(0, density)) : 1;
@@ -390,12 +417,154 @@ export function spawnAgents(
       }
     }
   }
+
+  const spots = count(base.parked);
+  if (spots > 0) {
+    // Own stream, drawn last, so adding parked bikes never moves a walker or rider.
+    const prng = mulberry32((seed ^ 0x2c1b3c6d) >>> 0);
+    const stalls = CURB_PARKING.slice(0, Math.round(CURB_PARKING.length * scale)).filter(
+      (p) => Math.abs(p.x) === PARK_X,
+    );
+    for (const bike of parkedBikes(prng, spots, stalls, park)) {
+      agents.push({
+        id: id++,
+        type: "bicycle",
+        x: bike.x,
+        z: bike.z,
+        yaw: bike.yaw,
+        v: 0,
+        v0: 0,
+        laneId: null,
+        s: 0,
+        path: null,
+        closed: false,
+        crossings: [],
+        seg: 0,
+        u: 0,
+        dir: 1,
+        parked: bike.kind,
+      });
+    }
+  }
   return agents;
 }
 
-/** Riders: every bicycle, scooter, and motorbike carries one. */
-export function hasRider(agent: Pick<SimAgent, "type">): boolean {
-  return agent.type !== "person";
+type ParkedPose = { x: number; z: number; yaw: number; kind: ParkKind };
+
+/**
+ * Stretch of Michigan a clip's parked bikes are drawn from: signed z range
+ * and, optionally, one sidewalk (+1 east, −1 west). Lets a clip put its bikes
+ * in frame and its facade bikes on the side its sun shades.
+ */
+export type ParkWindow = { z: [number, number]; side?: 1 | -1 };
+
+const PARK_MIN_Z = CHI_CURB + 7.4;
+/** |x| probed for a building behind a facade bike: the lot line plus a few metres. */
+export const FACADE_PROBE_X = MICH_CURB + SIDEWALK_W + 3.5;
+const PARK_MAX_Z = SPAN - 6;
+
+/** Clear of every curb stall's car body (plus `pad`) and, unless `poles` is false, of lamp poles. */
+function parkClear(x: number, z: number, pad: number, poles: boolean): boolean {
+  for (const c of CURB_PARKING) {
+    if (Math.abs(x - c.x) < CAR_W / 2 + pad && Math.abs(z - c.z) < CAR_L / 2 + pad) return false;
+  }
+  if (!poles) return true;
+  for (const lx of LAMP_XS) {
+    for (const lz of LAMP_ZS) if (Math.hypot(x - lx, z - lz) < 0.6) return false;
+  }
+  return true;
+}
+
+/**
+ * Deterministic parked-bike layout on the two Michigan sidewalks, cycling
+ * through PARK_KINDS. Every bike sits on sidewalk, out of buildings, clear of
+ * car bodies and poles, and at least 2 m from any other spot.
+ */
+export function parkedBikes(
+  rng: () => number,
+  spots: number,
+  stalls: readonly { x: number; z: number; yaw: number }[],
+  park?: ParkWindow,
+): ParkedPose[] {
+  const out: ParkedPose[] = [];
+  const along = () => (rng() < 0.5 ? 0 : Math.PI) + (rng() - 0.5) * 0.3;
+  const farFromOthers = (bikes: Pt[]) =>
+    bikes.every((b) => out.every((o) => Math.hypot(o.x - b.x, o.z - b.z) >= 2));
+  const onWalk = (b: Pt) =>
+    Math.abs(b.x) > MICH_CURB + 0.35 &&
+    Math.abs(b.x) < MICH_CURB + SIDEWALK_W - 0.3 &&
+    Math.abs(b.z) >= PARK_MIN_Z &&
+    Math.abs(b.z) <= PARK_MAX_Z &&
+    !pointInBuilding(b.x, b.z, 0.4);
+  for (let i = 0; i < spots; i++) {
+    const kind = PARK_KINDS[i % PARK_KINDS.length]!;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const flip = rng() < 0.5 ? 1 : -1;
+      const side = park?.side ?? flip;
+      const zs = park
+        ? park.z[0] + rng() * (park.z[1] - park.z[0])
+        : (rng() < 0.5 ? 1 : -1) * (PARK_MIN_Z + rng() * (PARK_MAX_Z - PARK_MIN_Z));
+      let bikes: ParkedPose[] = [];
+      if (kind === "rack") {
+        // Perpendicular to the curb, wheels toward the road, packed so oblique views overlap them.
+        const x = side * (MICH_CURB + 0.35 + PARKED_BIKE_SIZE.length / 2);
+        let z = zs;
+        for (let k = 0; k < RACK_SIZE; k++) {
+          bikes.push({ x, z, yaw: side * (Math.PI / 2) + (rng() - 0.5) * 0.16, kind });
+          z += 0.55 + rng() * 0.15;
+        }
+      } else if (kind === "open") {
+        bikes = [{ x: side * (MICH_CURB + 2.2 + rng() * 1.4), z: zs, yaw: along(), kind }];
+      } else if (kind === "facade") {
+        const x = side * (MICH_CURB + SIDEWALK_W - 0.75);
+        // Needs a building right behind it to cast the shade.
+        if (!pointInBuilding(side * FACADE_PROBE_X, zs)) continue;
+        bikes = [{ x, z: zs, yaw: along(), kind }];
+      } else if (kind === "car") {
+        const near = stalls.filter(
+          (p) =>
+            (!park?.side || Math.sign(p.x) === park.side) &&
+            (!park || (p.z >= park.z[0] - 2 && p.z <= park.z[1] + 2)),
+        );
+        if (near.length === 0) continue;
+        const stall = near[Math.floor(rng() * near.length)]!;
+        const sx = Math.sign(stall.x);
+        bikes = [
+          {
+            x: sx * (PARK_X + CAR_W / 2 + 0.6),
+            z: stall.z + (rng() - 0.5) * 3.2,
+            yaw: along(),
+            kind,
+          },
+        ];
+      } else {
+        const lx = LAMP_XS[side > 0 ? 0 : 1];
+        const lamps = LAMP_ZS.filter((z) => !park || (z >= park.z[0] && z <= park.z[1]));
+        if (lamps.length === 0) continue;
+        const lz = lamps[Math.floor(rng() * lamps.length)]!;
+        bikes = [
+          {
+            x: lx + side * 0.45,
+            z: lz + (rng() < 0.5 ? 1 : -1) * (0.35 + rng() * 0.5),
+            yaw: along(),
+            kind,
+          },
+        ];
+      }
+      const pad = kind === "car" ? 0.15 : 0.35;
+      if (!bikes.every(onWalk)) continue;
+      if (!bikes.every((b) => parkClear(b.x, b.z, pad, kind !== "pole"))) continue;
+      if (!farFromOthers(bikes)) continue;
+      out.push(...bikes);
+      break;
+    }
+  }
+  return out;
+}
+
+/** Riders: every moving bicycle, scooter, and motorbike carries one. Parked bikes do not. */
+export function hasRider(agent: Pick<SimAgent, "type" | "parked">): boolean {
+  return agent.type !== "person" && !agent.parked;
 }
 
 /**
@@ -422,9 +591,9 @@ const RIDER_FOOTPRINT = { length: 0.56, width: 0.46 };
 
 /** Oriented box corners of the rider alone. Empty for pedestrians. */
 export function riderCorners(
-  agent: Pick<SimAgent, "x" | "z" | "yaw" | "type">,
+  agent: Pick<SimAgent, "x" | "z" | "yaw" | "type" | "parked">,
 ): { x: number; y: number; z: number }[] {
-  if (agent.type === "person") return [];
+  if (!hasRider(agent) || agent.type === "person") return [];
   const pose = RIDER_POSE[agent.type];
   const fx = Math.sin(agent.yaw);
   const fz = Math.cos(agent.yaw);
@@ -461,11 +630,11 @@ export function agentZone(agent: Pick<SimAgent, "x" | "z" | "laneId">): string |
   return agent.laneId ?? zoneAt(agent.x, agent.z);
 }
 
-/** Oriented box corners of the rig, rider included. */
+/** Oriented box corners of the rig, rider included. A parked bike is the bike alone. */
 export function agentCorners(
-  agent: Pick<SimAgent, "x" | "z" | "yaw" | "type">,
+  agent: Pick<SimAgent, "x" | "z" | "yaw" | "type" | "parked">,
 ): { x: number; y: number; z: number }[] {
-  const size = AGENT_SIZE[agent.type];
+  const size = agent.parked ? PARKED_BIKE_SIZE : AGENT_SIZE[agent.type];
   const fx = Math.sin(agent.yaw);
   const fz = Math.cos(agent.yaw);
   const rx = Math.cos(agent.yaw);

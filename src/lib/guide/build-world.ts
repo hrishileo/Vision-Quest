@@ -9,6 +9,8 @@ import {
   INTER_HALF_X,
   INTER_HALF_Z,
   MAG_MILE,
+  LAMP_XS,
+  LAMP_ZS,
   MICH_CURB,
   MICH_NB,
   MICH_SB,
@@ -19,7 +21,7 @@ import {
   type BuildingFoot,
 } from "./city";
 import { TrafficSim, type SimCar, type TrafficDiag } from "./traffic";
-import { AGENT_SIZE, type AgentType, type SimAgent } from "./agents";
+import { AGENT_SIZE, PARKED_BIKE_SIZE, type AgentType, type SimAgent } from "./agents";
 import { DEBRIS, type DebrisDef } from "./debris";
 
 export type CarRig = {
@@ -34,6 +36,7 @@ export type AgentRig = {
   group: THREE.Group;
   id: number;
   type: AgentType;
+  parked: boolean;
 };
 
 export type SignalHead = {
@@ -129,6 +132,20 @@ function makeAgentRig(kit: AgentKit, agent: SimAgent): THREE.Group {
   const hl = size.length / 2;
   if (agent.type === "person") {
     g.add(figure(kit, shirt, 0, size.height, false));
+  } else if (agent.parked) {
+    // Bike alone on its kickstand: frame in a shirt colour for variety, saddle and bars, a slight lean.
+    const p = PARKED_BIKE_SIZE;
+    const ph = p.length / 2;
+    const r = 0.34;
+    const bike = new THREE.Group();
+    bike.add(wheel(kit, r, ph - r), wheel(kit, r, -ph + r));
+    bike.add(part(kit, shirt, 0.06, 0.08, p.length - 2 * r, 0, 0.62, 0));
+    bike.add(part(kit, shirt, 0.06, 0.36, 0.06, 0, 0.8, -0.18));
+    bike.add(part(kit, kit.frame, 0.16, 0.06, 0.26, 0, 0.98, -0.2));
+    bike.add(part(kit, kit.frame, 0.06, 0.42, 0.06, 0, 0.83, ph - r));
+    bike.add(part(kit, kit.frame, p.width, 0.04, 0.05, 0, 1.03, ph - r - 0.04));
+    bike.rotation.z = agent.id % 2 ? 0.1 : -0.1;
+    g.add(bike);
   } else if (agent.type === "bicycle") {
     const r = 0.34;
     g.add(wheel(kit, r, hl - r), wheel(kit, r, -hl + r));
@@ -513,10 +530,8 @@ export function buildWorld(): WorldBuild {
   const poleGeo = new THREE.CylinderGeometry(0.08, 0.1, 6.2, 8);
   const lampHead = new THREE.BoxGeometry(0.9, 0.12, 0.32);
   geos.push(poleGeo, lampHead);
-  const lampXs = [MICH_CURB + 1.6, -(MICH_CURB + 1.6)];
-  const lampZs = [-66, -48, -32, 32, 48, 66];
-  for (const x of lampXs) {
-    for (const z of lampZs) {
+  for (const x of LAMP_XS) {
+    for (const z of LAMP_ZS) {
       group.add(mesh(poleGeo, poleMat, x, 3.1, z));
       group.add(mesh(lampHead, light, x, 6.2, z));
     }
@@ -609,7 +624,12 @@ export function buildWorld(): WorldBuild {
   geos.push(kit.box, kit.head, kit.wheel);
   materials.push(kit.skin, kit.pants, kit.frame, ...kit.shirts);
   const spawnAgent = (agent: SimAgent): AgentRig => {
-    const rig = { group: makeAgentRig(kit, agent), id: agent.id, type: agent.type };
+    const rig = {
+      group: makeAgentRig(kit, agent),
+      id: agent.id,
+      type: agent.type,
+      parked: Boolean(agent.parked),
+    };
     group.add(rig.group);
     return rig;
   };
@@ -659,7 +679,8 @@ function agentsInSync(world: WorldBuild): boolean {
   if (agents.length !== world.agents.length) return false;
   for (let i = 0; i < agents.length; i++) {
     const rig = world.agents[i]!;
-    if (rig.id !== agents[i]!.id || rig.type !== agents[i]!.type) return false;
+    const a = agents[i]!;
+    if (rig.id !== a.id || rig.type !== a.type || rig.parked !== Boolean(a.parked)) return false;
   }
   return true;
 }

@@ -5,8 +5,7 @@ import {
   LANES,
   LANE_W,
   MAG_MILE,
-  PARK_X,
-  PARK_Z,
+  CURB_PARKING,
   SPAN,
   buildingAabb,
   carHitsBuilding,
@@ -20,6 +19,7 @@ import {
 import {
   AGENT_SIZE,
   spawnAgents,
+  type ParkWindow,
   stepAgents,
   type AgentCounts,
   type AgentSignals,
@@ -244,7 +244,12 @@ export class TrafficSim {
     this.reset(seed);
   }
 
-  reset(seed = Date.now(), density = 1, agentCounts?: Partial<AgentCounts>) {
+  reset(
+    seed = Date.now(),
+    density = 1,
+    agentCounts?: Partial<AgentCounts>,
+    park?: ParkWindow,
+  ) {
     const scale = Number.isFinite(density) ? Math.min(2, Math.max(0, density)) : 1;
     this.density = scale;
     this.rng = mulberry32(seed >>> 0);
@@ -255,7 +260,7 @@ export class TrafficSim {
     this.links = [];
     this.syncSignals();
     this.spawn();
-    this.agents = spawnAgents(seed >>> 0, scale, agentCounts);
+    this.agents = spawnAgents(seed >>> 0, scale, agentCounts, park);
   }
 
   /** Replace the fleet. Used by the detour scenario; the default pursuit spawn does not call this. */
@@ -861,16 +866,7 @@ export class TrafficSim {
       }
     }
 
-    const parks: { x: number; z: number; yaw: number }[] = [
-      { x: PARK_X, z: -34, yaw: Math.PI },
-      { x: PARK_X, z: -48, yaw: Math.PI },
-      { x: PARK_X, z: 38, yaw: 0 },
-      { x: -PARK_X, z: -36, yaw: Math.PI },
-      { x: -PARK_X, z: 42, yaw: 0 },
-      { x: 36, z: PARK_Z, yaw: Math.PI / 2 },
-      { x: -40, z: -PARK_Z, yaw: -Math.PI / 2 },
-      { x: 44, z: -PARK_Z, yaw: -Math.PI / 2 },
-    ];
+    const parks = CURB_PARKING;
     const parkCount = Math.round(parks.length * this.density);
     let parkedPlaced = 0;
     for (const p of parks) {

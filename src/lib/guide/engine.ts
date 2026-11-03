@@ -203,6 +203,8 @@ export class GuideEngine {
   private corpusRay = new THREE.Raycaster();
   private scripted = false;
   private scriptedTod: TimeOfDay | null = null;
+  /** Ground point the scripted sun's shadow map centres on, for clips that opt into cast shadows. */
+  private scriptedShadowAt: { x: number; z: number } | null = null;
   private debrisHome: { id: number; x: number; z: number; yaw: number }[] | null = null;
   private addedDebris: DebrisRig[] = [];
   private studioCarPhase = 0;
@@ -1718,8 +1720,26 @@ export class GuideEngine {
     this.hemi.intensity = sun.hemiIntensity;
     this.key.color.setHex(sun.key);
     this.key.intensity = sun.keyIntensity;
-    this.key.position.set(sun.keyPosition[0], sun.keyPosition[1], sun.keyPosition[2]);
-    this.key.castShadow = false;
+    const at = this.scriptedShadowAt;
+    if (at) {
+      // Same sun direction, shifted to sit over the clip so its ±40 m shadow box covers the frame.
+      this.key.target.position.set(at.x, 0, at.z);
+      this.key.position.set(
+        at.x + sun.keyPosition[0],
+        sun.keyPosition[1],
+        at.z + sun.keyPosition[2],
+      );
+      if (!this.key.target.parent) this.scene.add(this.key.target);
+      this.key.target.updateMatrixWorld();
+      this.key.shadow.camera.far = 220;
+      this.key.shadow.camera.updateProjectionMatrix();
+      this.key.castShadow = true;
+    } else {
+      this.key.target.position.set(0, 0, 0);
+      this.key.target.updateMatrixWorld();
+      this.key.position.set(sun.keyPosition[0], sun.keyPosition[1], sun.keyPosition[2]);
+      this.key.castShadow = false;
+    }
     this.rim.intensity = sun.rim;
     this.scene.fog = this.pursuitFog;
     this.pursuitFog.color.setHex(sun.fog);
@@ -1840,6 +1860,11 @@ export class GuideEngine {
       this.world.group.visible = true;
       this.studioCar.visible = false;
       this.scriptedTod = spec.timeOfDay;
+      this.scriptedShadowAt = spec.shadows
+        ? spec.topDown
+          ? { x: spec.x, z: spec.z }
+          : { x: (spec.x + spec.lookX) / 2, z: (spec.z + spec.lookZ) / 2 }
+        : null;
       this.applyScriptedSun(spec.timeOfDay, spec.topDown ? spec.altitude : 0);
       const cam = this.drone.droneCam;
       prevFar = cam.far;
@@ -1847,7 +1872,7 @@ export class GuideEngine {
       if (spec.topDown) cam.far = Math.max(prevFar, spec.altitude * 2.5);
       cam.updateProjectionMatrix();
 
-      this.world.sim.reset(spec.seed, spec.density, spec.agents);
+      this.world.sim.reset(spec.seed, spec.density, spec.agents, spec.park);
       syncWorldCars(this.world);
       this.world.sim.blocks = spec.blockades.map((block) => ({
         laneId: block.laneId,
@@ -1913,6 +1938,13 @@ export class GuideEngine {
       this.corpus.stop();
       this.scripted = false;
       this.scriptedTod = null;
+      if (this.scriptedShadowAt) {
+        this.scriptedShadowAt = null;
+        this.key.target.position.set(0, 0, 0);
+        this.key.target.updateMatrixWorld();
+        this.key.shadow.camera.far = 90;
+        this.key.shadow.camera.updateProjectionMatrix();
+      }
       guide.setCorpusRecording(false);
       useGuide.setState({ paused: wasPaused });
     }

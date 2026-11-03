@@ -28,6 +28,22 @@ export const CAR_W = 1.8;
 export const PARK_X = 12.8;
 export const PARK_Z = 10.2;
 
+/** Curb-side parking stalls, in spawn order. The fleet fills the first round(8 × density). */
+export const CURB_PARKING: readonly { x: number; z: number; yaw: number }[] = [
+  { x: PARK_X, z: -34, yaw: Math.PI },
+  { x: PARK_X, z: -48, yaw: Math.PI },
+  { x: PARK_X, z: 38, yaw: 0 },
+  { x: -PARK_X, z: -36, yaw: Math.PI },
+  { x: -PARK_X, z: 42, yaw: 0 },
+  { x: 36, z: PARK_Z, yaw: Math.PI / 2 },
+  { x: -40, z: -PARK_Z, yaw: -Math.PI / 2 },
+  { x: 44, z: -PARK_Z, yaw: -Math.PI / 2 },
+];
+
+/** Lamp poles on both Michigan sidewalks. Mirrors the lamp loop in build-world.ts. */
+export const LAMP_XS = [MICH_CURB + 1.6, -(MICH_CURB + 1.6)] as const;
+export const LAMP_ZS = [-66, -48, -32, 32, 48, 66] as const;
+
 /** Lane center X on Michigan (NB +X / east of center, SB −X). */
 export const MICH_NB = [2.0, 5.5, 9.0] as const;
 export const MICH_SB = [-2.0, -5.5, -9.0] as const;

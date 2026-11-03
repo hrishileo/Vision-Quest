@@ -335,8 +335,9 @@ export function riderRecord(
 
 /**
  * Every label one agent contributes: its own box, plus a separate `person`
- * box for the rider when it is a bicycle, scooter, or motorbike. The rider
- * box is only kept next to its vehicle box, so `riding` always resolves.
+ * box for the rider when it is a bicycle, scooter, or motorbike. The two are
+ * kept or dropped together, so `riding` always resolves and a labelled rig
+ * always carries its rider.
  */
 export function agentLabels(
   agent: AgentPose,
@@ -350,7 +351,8 @@ export function agentLabels(
   if (!body) return [];
   if (agent.type === "person" || !riderCorners || riderCorners.length === 0) return [body];
   const rider = riderRecord({ ...agent, type: agent.type }, riderCorners, camera, width, height);
-  return rider ? [body, rider] : [body];
+  // A rig whose rider lands outside the frame is dropped with it: no kept rig without its rider box.
+  return rider ? [body, rider] : [];
 }
 
 /**
@@ -363,22 +365,40 @@ export function agentLabels(
 export const MIN_PERSON_PX = 6;
 
 /**
- * Drop pedestrian boxes under `minPx` on their shorter side. A rider keeps its
- * person box at any size while its bicycle or motor box is in the frame, so a
- * drawn rider is never left unlabelled inside a vehicle box (VisDrone boxes
- * the rider separately too). Other classes pass through.
+ * Smallest rider person box, in capture pixels on the shorter side. Below it
+ * the rider and its bicycle or motor box are dropped together, so a kept rig
+ * never shows a rider without a rider box.
+ */
+export const MIN_RIDER_PX = 3;
+
+/**
+ * Size floors. A pedestrian box under `minPx` is dropped. A rider box keeps
+ * its label down to `minRiderPx` while its bicycle or motor box is in the
+ * frame; under that, the rider and its vehicle box go together (VisDrone
+ * boxes the rider separately, so a labelled rig must carry its rider). A
+ * rider whose vehicle box is not in the frame falls back to the pedestrian
+ * floor. Every other class passes through.
  */
 export function cullSmallPersons(
   objects: readonly CorpusObject[],
   minPx: number = MIN_PERSON_PX,
+  minRiderPx: number = MIN_RIDER_PX,
 ): { kept: CorpusObject[]; culled: CorpusObject[] } {
+  const short = (o: CorpusObject) => Math.min(o.bbox.w, o.bbox.h);
+  const vehicles = new Set(objects.filter((o) => o.class !== "person").map((o) => o.trackId));
+  const droppedRigs = new Set(
+    objects
+      .filter((o) => o.riding !== undefined && vehicles.has(o.riding) && short(o) < minRiderPx)
+      .map((o) => o.riding!),
+  );
   const kept: CorpusObject[] = [];
   const culled: CorpusObject[] = [];
-  const vehicles = new Set(objects.filter((o) => o.class !== "person").map((o) => o.trackId));
   for (const obj of objects) {
-    const rider = obj.riding !== undefined && vehicles.has(obj.riding);
-    if (obj.class === "person" && !rider && Math.min(obj.bbox.w, obj.bbox.h) < minPx) culled.push(obj);
-    else kept.push(obj);
+    let drop = false;
+    if (obj.class !== "person") drop = droppedRigs.has(obj.trackId);
+    else if (obj.riding !== undefined && vehicles.has(obj.riding)) drop = droppedRigs.has(obj.riding);
+    else drop = short(obj) < minPx;
+    (drop ? culled : kept).push(obj);
   }
   return { kept, culled };
 }

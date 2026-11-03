@@ -28,6 +28,7 @@ import {
   CORPUS_HEIGHT,
   CORPUS_WIDTH,
   MIN_PERSON_PX,
+  MIN_RIDER_PX,
   RoadOutOfViewError,
   YOLO_CLASS_ID,
   agentLabels,
@@ -463,10 +464,13 @@ describe("minimum pedestrian size", () => {
         assert.ok(Math.min(o.bbox.w, o.bbox.h) >= MIN_PERSON_PX, o.trackId);
       }
       const rawPersons = raw.filter((o) => o.class === "person").length;
-      assert.equal(persons.length + culled.length, rawPersons, id);
-      // Riders' vehicles are never culled.
+      const culledPersons = culled.filter((o) => o.class === "person");
+      assert.equal(persons.length + culledPersons.length, rawPersons, id);
+      // A rig leaves the labels only together with its sub-3 px rider.
+      const culledRigs = culled.filter((o) => o.class !== "person");
+      for (const r of culledRigs) assert.ok(culledPersons.some((o) => o.riding === r.trackId), r.trackId);
       assert.equal(
-        kept.filter((o) => o.class !== "person").length,
+        kept.filter((o) => o.class !== "person").length + culledRigs.length,
         raw.filter((o) => o.class !== "person").length,
       );
       if (id === "top30") {
@@ -492,7 +496,7 @@ describe("minimum pedestrian size", () => {
   });
 });
 
-describe("riders keep their person box under the floor", () => {
+describe("rider box floor: 3 px, rider and rig kept or dropped together", () => {
   const box = (w: number, h: number) => ({ x: 100, y: 100, w, h });
   const base = {
     type: "person" as const,
@@ -502,57 +506,90 @@ describe("riders keep their person box under the floor", () => {
     speed: 1,
     zone: null,
   };
+  const rig = (cls: "bicycle" | "motor", id: string, w: number, h: number): CorpusObject => ({
+    ...base,
+    class: cls,
+    type: cls === "bicycle" ? "bicycle" : "scooter",
+    trackId: id,
+    bbox: box(w, h),
+  });
+  const rider = (id: string, of: string, w: number, h: number): CorpusObject => ({
+    ...base,
+    class: "person",
+    trackId: id,
+    riding: of,
+    bbox: box(w, h),
+  });
 
-  it("keeps a 3 px rider next to its kept bicycle or motor, and still drops a 3 px pedestrian", () => {
-    const bike: CorpusObject = { ...base, class: "bicycle", type: "bicycle", trackId: "bike-4", bbox: box(12, 9) };
-    const motor: CorpusObject = { ...base, class: "motor", type: "scooter", trackId: "motor-5", bbox: box(10, 8) };
-    const bikeRider: CorpusObject = {
-      ...base,
-      class: "person",
-      trackId: "ped-rider-4",
-      riding: "bike-4",
-      bbox: box(3, 4),
-    };
-    const motorRider: CorpusObject = {
-      ...base,
-      class: "person",
-      trackId: "ped-rider-5",
-      riding: "motor-5",
-      bbox: box(2.5, 5),
-    };
-    const walker: CorpusObject = { ...base, class: "person", trackId: "ped-9", bbox: box(3, 4) };
-    const orphan: CorpusObject = { ...base, class: "person", trackId: "ped-rider-7", riding: "bike-7", bbox: box(3, 4) };
-    const { kept, culled } = cullSmallPersons([bike, bikeRider, motor, motorRider, walker, orphan]);
+  it("keeps 3–6 px riders with their rigs, drops sub-3 px riders as a pair, and keeps the 6 px pedestrian floor", () => {
+    assert.equal(MIN_RIDER_PX, 3);
+    const objects = [
+      rig("bicycle", "bike-4", 12, 9),
+      rider("ped-rider-4", "bike-4", 3, 4), // exactly the floor: kept
+      rig("motor", "motor-5", 10, 8),
+      rider("ped-rider-5", "motor-5", 4.5, 5), // under 6, over 3: kept
+      rig("bicycle", "bike-6", 6, 5),
+      rider("ped-rider-6", "bike-6", 2.9, 6), // under 3: dropped with bike-6
+      rig("motor", "motor-8", 5, 4),
+      rider("ped-rider-8", "motor-8", 2, 2), // under 3: dropped with motor-8
+      { ...base, class: "person" as const, trackId: "ped-9", bbox: box(5.9, 20) }, // pedestrian under 6
+      { ...base, class: "person" as const, trackId: "ped-10", bbox: box(6, 12) }, // pedestrian at 6
+      rider("ped-rider-7", "bike-7", 5, 5), // no vehicle box: pedestrian floor applies
+    ];
+    const { kept, culled } = cullSmallPersons(objects);
     assert.deepEqual(
       kept.map((o) => o.trackId),
-      ["bike-4", "ped-rider-4", "motor-5", "ped-rider-5"],
+      ["bike-4", "ped-rider-4", "motor-5", "ped-rider-5", "ped-10"],
     );
-    // The floor still applies to pedestrians, and to a rider whose vehicle box is not in the frame.
     assert.deepEqual(
       culled.map((o) => o.trackId),
-      ["ped-9", "ped-rider-7"],
+      ["bike-6", "ped-rider-6", "motor-8", "ped-rider-8", "ped-9", "ped-rider-7"],
     );
   });
 
-  it("leaves no labelled bicycle or motor without its rider box in 30 and 60 m nadir frames", () => {
-    for (const id of ["top30", "top60"]) {
+  it("drops a rig together with a rider that projects outside the frame", () => {
+    const camera = nadirCamera(0, 30, 0, 0);
+    const [bike] = spawnAgents(1, 1, { crossers: 0, strollers: 0, bicycle: 1, scooter: 0, motorbike: 0 });
+    assert.ok(bike);
+    const inside = { ...bike, x: 0, z: 0 };
+    assert.deepEqual(
+      agentLabelsRaw([inside], camera).map((o) => o.class),
+      ["bicycle", "person"],
+    );
+    // A rider box that does not project (as when only the rig's tip pokes into frame) takes the rig with it.
+    const labels = agentLabels(inside, agentCorners(inside), [{ x: 0, y: 500, z: 0 }], camera, CORPUS_WIDTH, CORPUS_HEIGHT);
+    assert.deepEqual(labels, []);
+  });
+
+  it("leaves no kept bicycle or motor without its rider box, at 30, 60, and 120 m", () => {
+    let pairsDropped = 0;
+    let smallKept = 0;
+    for (const id of ["top30", "top60", "top120"]) {
       const p = fixtures.nadir.find((n) => n.id === id)!;
       const sim = new TrafficSim(p.seed);
       sim.reset(p.seed, p.density, { bicycle: 14, scooter: 6, motorbike: 4 });
       sim.advance(Math.round(p.warmupS / SIM_STEP));
-      const { kept } = cullSmallPersons(agentLabelsRaw(sim.agents, nadirCamera(p.x, p.agl, p.z, p.heading)));
-      const ridden = new Set(kept.filter((o) => o.riding).map((o) => o.riding));
-      const rigs = kept.filter((o) => o.class === "bicycle" || o.class === "motor");
-      assert.ok(rigs.length >= 5, `${id}: ${rigs.length} rigs`);
-      const small = kept.filter((o) => o.riding && Math.min(o.bbox.w, o.bbox.h) < MIN_PERSON_PX);
-      if (id === "top60") assert.ok(small.length > 0, "60 m has riders under the floor to keep");
-      for (const rig of rigs) {
-        const b = rig.bbox;
-        // A rig cut by the frame edge can have its rider fully outside the frame.
-        if (b.x < 1 || b.y < 1 || b.x + b.w > CORPUS_WIDTH - 1 || b.y + b.h > CORPUS_HEIGHT - 1) continue;
-        assert.ok(ridden.has(rig.trackId), `${id} ${rig.trackId} lost its rider`);
+      const { kept, culled } = cullSmallPersons(
+        agentLabelsRaw(sim.agents, nadirCamera(p.x, p.agl, p.z, p.heading)),
+      );
+      const riders = new Map(kept.filter((o) => o.riding).map((o) => [o.riding!, o]));
+      for (const r of kept.filter((o) => o.class === "bicycle" || o.class === "motor")) {
+        const box = riders.get(r.trackId);
+        assert.ok(box, `${id} ${r.trackId} kept without its rider box`);
+        assert.ok(Math.min(box.bbox.w, box.bbox.h) >= MIN_RIDER_PX, `${id} ${box.trackId}`);
+        if (Math.min(box.bbox.w, box.bbox.h) < MIN_PERSON_PX) smallKept += 1;
+      }
+      for (const o of kept.filter((x) => x.class === "person" && !x.riding)) {
+        assert.ok(Math.min(o.bbox.w, o.bbox.h) >= MIN_PERSON_PX, `${id} ${o.trackId}`);
+      }
+      // Culled riders always leave with their rig.
+      for (const o of culled.filter((x) => x.riding)) {
+        if (culled.some((x) => x.trackId === o.riding)) pairsDropped += 1;
+        else assert.ok(!kept.some((x) => x.trackId === o.riding), `${id} ${o.riding} kept without rider`);
       }
     }
+    assert.ok(smallKept > 0, "some 3–6 px riders are kept");
+    assert.ok(pairsDropped > 0, "some sub-3 px rider+rig pairs are dropped");
   });
 });
 

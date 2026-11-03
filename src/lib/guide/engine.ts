@@ -193,7 +193,7 @@ export class GuideEngine {
   private corpusPixels: Uint8Array | null = null;
   private corpusBox = new THREE.Box3();
   private corpusCorners = Array.from({ length: 8 }, () => new THREE.Vector3());
-  /** Person boxes under `MIN_PERSON_PX`, one list per sampled frame. Not labels; kept for the audit. */
+  /** Boxes dropped by `cullSmallPersons`, one list per sampled frame. Not labels; kept for the audit. */
   private corpusCulled: CorpusObject[][] = [];
   private corpusNdc = new THREE.Vector3();
   private corpusTo = new THREE.Vector3();

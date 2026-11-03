@@ -89,7 +89,11 @@ describe("CAM0 training sequences", () => {
       const base = SUN[seq.timeOfDay];
       assert.ok(seq.shadows && seq.shade, seq.id);
       assert.ok(sun.hemiIntensity < base.hemiIntensity && sun.env < base.env, seq.id);
-      assert.ok(sun.keyIntensity > base.keyIntensity, seq.id);
+      // Ambient falls relative to the sun, which is what deepens cast shade.
+      assert.ok(
+        sun.hemiIntensity / sun.keyIntensity < base.hemiIntensity / base.keyIntensity,
+        seq.id,
+      );
       const [x, y, z] = sun.keyPosition;
       const elev = (Math.atan2(y, Math.hypot(x, z)) * 180) / Math.PI;
       assert.ok(elev >= seq.shade!.minElevationDeg - 1e-9, `${seq.id} sun at ${elev.toFixed(1)}°`);

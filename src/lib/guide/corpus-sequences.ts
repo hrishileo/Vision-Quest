@@ -160,6 +160,13 @@ export type ShadeLight = {
   env: number;
   key: number;
   minElevationDeg: number;
+  /** Multiplier on the preset's tone-mapping exposure. Default 1. */
+  exposure?: number;
+  /** Sun direction (any length) in place of the preset's, before the elevation floor. */
+  sunFrom?: [number, number, number];
+  /** Sun and sky-dome colours in place of the preset's. */
+  keyColor?: number;
+  hemiColor?: number;
 };
 
 /** Light preset a clip records under: `SUN[timeOfDay]` untouched unless the clip sets `shade`. */
@@ -167,15 +174,18 @@ export function clipSun(spec: Pick<SequenceSpec, "timeOfDay" | "shade">): SunPre
   const sun = SUN[spec.timeOfDay];
   const shade = spec.shade;
   if (!shade) return sun;
-  const [x, y, z] = sun.keyPosition;
+  const [x, y, z] = shade.sunFrom ?? sun.keyPosition;
   const flat = Math.hypot(x, z);
   const minY = flat * Math.tan((shade.minElevationDeg * Math.PI) / 180);
   return {
     ...sun,
+    hemi: shade.hemiColor ?? sun.hemi,
+    key: shade.keyColor ?? sun.key,
     hemiIntensity: sun.hemiIntensity * shade.hemi,
     env: sun.env * shade.env,
     keyIntensity: sun.keyIntensity * shade.key,
     keyPosition: [x, Math.max(y, minY), z],
+    exposure: sun.exposure * (shade.exposure ?? 1),
   };
 }
 
@@ -187,7 +197,7 @@ export type RecordedSequence = {
   frames: CorpusFrame[];
   /** PNG bytes, base64, one per frame. */
   pngs: string[];
-  /** Person boxes dropped under `MIN_PERSON_PX`, per frame. Audit only, never labels. */
+  /** Boxes dropped by the size floors, per frame: small pedestrians, and sub-3 px riders with their rig. Audit only, never labels. */
   culled?: CorpusObject[][];
 };
 
@@ -217,6 +227,29 @@ const CLIP = { frames: 12, hz: 5 } as const;
 
 /** Round 3 parked-bike clips: dim ambient, strong and higher sun, so building shade is deep. */
 const SHADE_LIGHT: ShadeLight = { hemi: 0.18, env: 0.15, key: 2.2, minElevationDeg: 45 };
+/**
+ * Noon parked clip: a late-morning sun from the east at about 45°, so the
+ * east-side buildings throw shade across the east walk, with the sun and
+ * exposure trimmed so the lit paving is not clipped.
+ */
+const SHADE_LIGHT_NOON: ShadeLight = {
+  hemi: 0.17,
+  env: 0.15,
+  key: 1.0,
+  exposure: 0.82,
+  minElevationDeg: 40,
+  sunFrom: [64, 64, 12],
+};
+/** Dusk parked clip: warmer than night but not the red preset, bright enough to read. */
+const SHADE_LIGHT_DUSK: ShadeLight = {
+  hemi: 0.3,
+  env: 0.3,
+  key: 2.9,
+  exposure: 1.4,
+  minElevationDeg: 40,
+  keyColor: 0xffb48a,
+  hemiColor: 0xc8b4b0,
+};
 
 /**
  * Clips split by sequence id: every frame of a clip stays in one of train,
@@ -1039,8 +1072,8 @@ export const SEQUENCES: readonly SequenceSpec[] = [
     topDown: true,
     agents: { parked: 16 },
     shadows: true,
-    shade: SHADE_LIGHT,
-    park: { z: [14, 50] },
+    shade: SHADE_LIGHT_NOON,
+    park: { z: [14, 50], side: 1 },
   },
   {
     id: "s34-noon-parked-angled",
@@ -1091,7 +1124,7 @@ export const SEQUENCES: readonly SequenceSpec[] = [
     blockades: [],
     agents: { parked: 18 },
     shadows: true,
-    shade: SHADE_LIGHT,
+    shade: SHADE_LIGHT_DUSK,
     park: { z: [-56, -28], side: -1 },
   },
 ];

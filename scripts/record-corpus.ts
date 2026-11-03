@@ -15,6 +15,8 @@ import { chromium, type Browser, type Page } from "playwright";
 import {
   DATA_YAML,
   MIN_PERSON_PX,
+  MIN_RIDER_TRAIN_PX,
+  MIN_RIG_PX,
   classCounts,
   frameToYolo,
   framesToJsonl,
@@ -156,7 +158,7 @@ function writeSequence(out: string, recorded: RecordedSequence, spec: SequenceSp
     writeFileSync(join(splitLabels, `${flat}.txt`), yolo);
   });
   writeFileSync(join(root, "labels.jsonl"), framesToJsonl(recorded.frames));
-  // Person boxes under MIN_PERSON_PX. Audit trail only: not in labels.jsonl or the YOLO txt.
+  // Boxes dropped by cullSmallPersons. Audit trail only: not in labels.jsonl or the YOLO txt.
   writeFileSync(
     join(root, "culled.jsonl"),
     (recorded.culled ?? [])
@@ -289,7 +291,10 @@ async function main() {
           emptyFrames: { total: sum(emptyPerSequence), perSequence: emptyPerSequence },
           culledPersons: {
             minPersonPx: MIN_PERSON_PX,
-            rule: "person box dropped when min(w, h) < minPersonPx at 960x540 capture",
+            minRiderTrainPx: MIN_RIDER_TRAIN_PX,
+            minRigPx: MIN_RIG_PX,
+            rule:
+              "pedestrian box dropped when min(w, h) < minPersonPx at 960x540 capture; rider box and its rig dropped together only when the rider's min(w, h) * 1280/960 < minRiderTrainPx and the rig's min(w, h) < minRigPx at capture",
             total: sum(culledPerSequence),
             perSequence: culledPerSequence,
           },

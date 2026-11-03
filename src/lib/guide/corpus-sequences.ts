@@ -197,7 +197,7 @@ export type RecordedSequence = {
   frames: CorpusFrame[];
   /** PNG bytes, base64, one per frame. */
   pngs: string[];
-  /** Boxes dropped by the size floors, per frame: small pedestrians, and sub-3 px riders with their rig. Audit only, never labels. */
+  /** Boxes dropped by the size floors, per frame: small pedestrians, and sub-4 px (training scale) riders on a rig under the rig floor, with that rig. Audit only, never labels. */
   culled?: CorpusObject[][];
 };
 

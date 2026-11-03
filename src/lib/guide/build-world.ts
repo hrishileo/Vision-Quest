@@ -9,6 +9,8 @@ import {
   INTER_HALF_X,
   INTER_HALF_Z,
   MAG_MILE,
+  LAMP_XS,
+  LAMP_ZS,
   MICH_CURB,
   MICH_NB,
   MICH_SB,
@@ -19,7 +21,7 @@ import {
   type BuildingFoot,
 } from "./city";
 import { TrafficSim, type SimCar, type TrafficDiag } from "./traffic";
-import { AGENT_SIZE, type AgentType, type SimAgent } from "./agents";
+import { AGENT_SIZE, PARKED_BIKE_SIZE, type AgentType, type SimAgent } from "./agents";
 import { DEBRIS, type DebrisDef } from "./debris";
 
 export type CarRig = {
@@ -34,6 +36,7 @@ export type AgentRig = {
   group: THREE.Group;
   id: number;
   type: AgentType;
+  parked: boolean;
 };
 
 export type SignalHead = {
@@ -78,7 +81,85 @@ type AgentKit = {
   frame: THREE.MeshStandardMaterial;
   tire: THREE.MeshStandardMaterial;
   shirts: THREE.MeshStandardMaterial[];
+  /** Bicycles: thin tyre ring, spokes, and muted frame colours, so a 25–45 px bike reads thin. */
+  bikeWheel: THREE.TorusGeometry;
+  bikeTire: THREE.MeshStandardMaterial;
+  spoke: THREE.MeshStandardMaterial;
+  bikeFrames: THREE.MeshStandardMaterial[];
 };
+
+/** Muted, mid-tone bike frame paints: low contrast against paving, unlike solid dark bars. */
+const BIKE_FRAMES = [0x6f7880, 0x8a6a5e, 0x6c7d6a, 0x9a917c, 0x7a7088, 0xa0a4a6];
+const BIKE_WHEEL_R = 0.34;
+const TUBE = 0.028;
+
+const _zAxis = new THREE.Vector3(0, 0, 1);
+const _dir = new THREE.Vector3();
+
+/** Thin box tube from a to b, in rig-local metres. */
+function tube(kit: AgentKit, mat: THREE.Material, a: THREE.Vector3, b: THREE.Vector3, t = TUBE) {
+  _dir.subVectors(b, a);
+  const m = new THREE.Mesh(kit.box, mat);
+  m.scale.set(t, t, _dir.length());
+  m.position.addVectors(a, b).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(_zAxis, _dir.normalize());
+  m.castShadow = true;
+  return m;
+}
+
+/** Spoked bicycle wheel: thin tyre ring in the rig's YZ plane plus four spokes through the hub. */
+function bikeWheel(kit: AgentKit, z: number): THREE.Group {
+  const r = BIKE_WHEEL_R;
+  const g = new THREE.Group();
+  const ring = new THREE.Mesh(kit.bikeWheel, kit.bikeTire);
+  ring.scale.setScalar(r);
+  ring.rotation.y = Math.PI / 2;
+  ring.castShadow = true;
+  g.add(ring);
+  for (let k = 0; k < 4; k++) {
+    const a = (k * Math.PI) / 4;
+    const dy = Math.sin(a) * r * 0.94;
+    const dz = Math.cos(a) * r * 0.94;
+    g.add(tube(kit, kit.spoke, new THREE.Vector3(0, -dy, -dz), new THREE.Vector3(0, dy, dz), 0.012));
+  }
+  g.position.set(0, r, z);
+  return g;
+}
+
+/**
+ * Diamond-frame bicycle of `length` (tyre to tyre) built from thin tubes:
+ * stays, seat, top, and down tubes, fork, saddle, and bars. Local +Z is forward.
+ */
+function thinBicycle(kit: AgentKit, mat: THREE.Material, length: number): THREE.Group {
+  const r = BIKE_WHEEL_R;
+  const c = length / 2 - r;
+  const g = new THREE.Group();
+  g.add(bikeWheel(kit, -c), bikeWheel(kit, c));
+  const V = (y: number, z: number) => new THREE.Vector3(0, y, z);
+  const rear = V(r, -c);
+  const front = V(r, c);
+  const bb = V(0.3, -0.06);
+  const seat = V(0.84, -0.26);
+  const head = V(0.86, c - 0.16);
+  const headLow = V(0.66, c - 0.1);
+  g.add(
+    tube(kit, mat, rear, bb),
+    tube(kit, mat, rear, seat),
+    tube(kit, mat, bb, seat),
+    tube(kit, mat, seat, head),
+    tube(kit, mat, bb, headLow),
+    tube(kit, mat, headLow, front),
+    tube(kit, mat, head, headLow),
+    tube(kit, mat, head, V(1.0, c - 0.2)),
+    tube(kit, kit.spoke, V(0.9, -0.36), V(0.9, -0.16), 0.07),
+  );
+  const bar = new THREE.Mesh(kit.box, kit.spoke);
+  bar.scale.set(0.5, TUBE, TUBE);
+  bar.position.set(0, 1.0, c - 0.2);
+  bar.castShadow = true;
+  g.add(bar);
+  return g;
+}
 
 function part(
   kit: AgentKit,
@@ -129,11 +210,14 @@ function makeAgentRig(kit: AgentKit, agent: SimAgent): THREE.Group {
   const hl = size.length / 2;
   if (agent.type === "person") {
     g.add(figure(kit, shirt, 0, size.height, false));
+  } else if (agent.parked) {
+    // Bike alone on its kickstand, leaning slightly.
+    const paint = kit.bikeFrames[agent.id % kit.bikeFrames.length]!;
+    const bike = thinBicycle(kit, paint, PARKED_BIKE_SIZE.length);
+    bike.rotation.z = agent.id % 2 ? 0.1 : -0.1;
+    g.add(bike);
   } else if (agent.type === "bicycle") {
-    const r = 0.34;
-    g.add(wheel(kit, r, hl - r), wheel(kit, r, -hl + r));
-    g.add(part(kit, kit.frame, 0.06, 0.08, size.length - 2 * r, 0, 0.62, 0));
-    g.add(part(kit, kit.frame, 0.06, 0.5, 0.06, 0, 0.62, hl - r));
+    g.add(thinBicycle(kit, kit.bikeFrames[agent.id % kit.bikeFrames.length]!, size.length));
     const rider = figure(kit, shirt, 0.62, size.height, true);
     rider.position.z = -0.12;
     rider.rotation.x = 0.25;
@@ -513,10 +597,8 @@ export function buildWorld(): WorldBuild {
   const poleGeo = new THREE.CylinderGeometry(0.08, 0.1, 6.2, 8);
   const lampHead = new THREE.BoxGeometry(0.9, 0.12, 0.32);
   geos.push(poleGeo, lampHead);
-  const lampXs = [MICH_CURB + 1.6, -(MICH_CURB + 1.6)];
-  const lampZs = [-66, -48, -32, 32, 48, 66];
-  for (const x of lampXs) {
-    for (const z of lampZs) {
+  for (const x of LAMP_XS) {
+    for (const z of LAMP_ZS) {
       group.add(mesh(poleGeo, poleMat, x, 3.1, z));
       group.add(mesh(lampHead, light, x, 6.2, z));
     }
@@ -605,11 +687,22 @@ export function buildWorld(): WorldBuild {
     frame: new THREE.MeshStandardMaterial({ color: 0x1f2226, roughness: 0.5, metalness: 0.5 }),
     tire: rubber,
     shirts: SHIRTS.map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.82 })),
+    bikeWheel: new THREE.TorusGeometry(1, 0.06, 4, 24),
+    bikeTire: new THREE.MeshStandardMaterial({ color: 0x4c4f53, roughness: 0.9 }),
+    spoke: new THREE.MeshStandardMaterial({ color: 0x9a9da0, roughness: 0.6, metalness: 0.3 }),
+    bikeFrames: BIKE_FRAMES.map(
+      (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.2 }),
+    ),
   };
-  geos.push(kit.box, kit.head, kit.wheel);
-  materials.push(kit.skin, kit.pants, kit.frame, ...kit.shirts);
+  geos.push(kit.box, kit.head, kit.wheel, kit.bikeWheel);
+  materials.push(kit.skin, kit.pants, kit.frame, ...kit.shirts, kit.bikeTire, kit.spoke, ...kit.bikeFrames);
   const spawnAgent = (agent: SimAgent): AgentRig => {
-    const rig = { group: makeAgentRig(kit, agent), id: agent.id, type: agent.type };
+    const rig = {
+      group: makeAgentRig(kit, agent),
+      id: agent.id,
+      type: agent.type,
+      parked: Boolean(agent.parked),
+    };
     group.add(rig.group);
     return rig;
   };
@@ -659,7 +752,8 @@ function agentsInSync(world: WorldBuild): boolean {
   if (agents.length !== world.agents.length) return false;
   for (let i = 0; i < agents.length; i++) {
     const rig = world.agents[i]!;
-    if (rig.id !== agents[i]!.id || rig.type !== agents[i]!.type) return false;
+    const a = agents[i]!;
+    if (rig.id !== a.id || rig.type !== a.type || rig.parked !== Boolean(a.parked)) return false;
   }
   return true;
 }

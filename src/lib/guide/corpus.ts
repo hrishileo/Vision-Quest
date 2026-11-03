@@ -335,8 +335,9 @@ export function riderRecord(
 
 /**
  * Every label one agent contributes: its own box, plus a separate `person`
- * box for the rider when it is a bicycle, scooter, or motorbike. The rider
- * box is only kept next to its vehicle box, so `riding` always resolves.
+ * box for the rider when it is a bicycle, scooter, or motorbike. The two are
+ * kept or dropped together, so `riding` always resolves and a labelled rig
+ * always carries its rider.
  */
 export function agentLabels(
   agent: AgentPose,
@@ -350,7 +351,8 @@ export function agentLabels(
   if (!body) return [];
   if (agent.type === "person" || !riderCorners || riderCorners.length === 0) return [body];
   const rider = riderRecord({ ...agent, type: agent.type }, riderCorners, camera, width, height);
-  return rider ? [body, rider] : [body];
+  // A rig whose rider lands outside the frame is dropped with it: no kept rig without its rider box.
+  return rider ? [body, rider] : [];
 }
 
 /**
@@ -362,16 +364,59 @@ export function agentLabels(
  */
 export const MIN_PERSON_PX = 6;
 
-/** Drop person boxes under `minPx` on their shorter side. Other classes pass through. */
+/** Edge trains at 1280 px wide; capture is 960×540, so training pixels = capture × 1280/960. */
+export const TRAIN_WIDTH = 1280;
+
+/**
+ * Rider floor, in Edge's training pixels (1280 px wide) on the shorter side:
+ * 4 px there is 3 px at capture. On its own it drops nothing; see
+ * `cullSmallPersons`.
+ */
+export const MIN_RIDER_TRAIN_PX = 4;
+
+/**
+ * Size floor for a rider's bicycle or motor box, in capture pixels on the
+ * shorter side. The corpus has no separate vehicle floor, so this is the one
+ * box floor it already uses, `MIN_PERSON_PX` (8 px at training scale, the
+ * stride-8 cell).
+ */
+export const MIN_RIG_PX = MIN_PERSON_PX;
+
+/**
+ * Size floors.
+ * - A pedestrian box under `minPx` (capture) is dropped.
+ * - A rider box is dropped only when it is under `minRiderTrainPx` at Edge's
+ *   training scale AND its bicycle or motor box is under `minRigPx`. Its rig
+ *   goes with it, as before: VisDrone boxes the rider separately, so a kept rig
+ *   always carries its rider box. Otherwise the rider box is kept at any size.
+ * - A rider whose vehicle box is not in the frame falls back to the
+ *   pedestrian floor.
+ * Every other class passes through.
+ */
 export function cullSmallPersons(
   objects: readonly CorpusObject[],
   minPx: number = MIN_PERSON_PX,
+  minRiderTrainPx: number = MIN_RIDER_TRAIN_PX,
+  minRigPx: number = MIN_RIG_PX,
 ): { kept: CorpusObject[]; culled: CorpusObject[] } {
+  const short = (o: CorpusObject) => Math.min(o.bbox.w, o.bbox.h);
+  const vehicles = new Map(
+    objects.filter((o) => o.class !== "person").map((o) => [o.trackId, o] as const),
+  );
+  const droppedRigs = new Set<string>();
+  for (const o of objects) {
+    const rig = o.riding !== undefined ? vehicles.get(o.riding) : undefined;
+    // Compared as capture × 1280 against floor × 960, so 3 px capture is exactly 4 px, with no float drift.
+    if (rig && short(o) * TRAIN_WIDTH < minRiderTrainPx * CORPUS_WIDTH && short(rig) < minRigPx) droppedRigs.add(rig.trackId);
+  }
   const kept: CorpusObject[] = [];
   const culled: CorpusObject[] = [];
   for (const obj of objects) {
-    if (obj.class === "person" && Math.min(obj.bbox.w, obj.bbox.h) < minPx) culled.push(obj);
-    else kept.push(obj);
+    let drop = false;
+    if (obj.class !== "person") drop = droppedRigs.has(obj.trackId);
+    else if (obj.riding !== undefined && vehicles.has(obj.riding)) drop = droppedRigs.has(obj.riding);
+    else drop = short(obj) < minPx;
+    (drop ? culled : kept).push(obj);
   }
   return { kept, culled };
 }

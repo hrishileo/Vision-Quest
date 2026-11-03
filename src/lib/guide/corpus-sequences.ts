@@ -1,4 +1,4 @@
-import type { AgentCounts } from "./agents.ts";
+import type { AgentCounts, ParkWindow } from "./agents.ts";
 import type { CorpusFrame, CorpusObject } from "./corpus.ts";
 import { laneById, laneIdAt, lanePose } from "./city.ts";
 import type { DebrisKind, DebrisType } from "./debris.ts";
@@ -138,7 +138,56 @@ export type SequenceSpec = {
   agents?: Partial<AgentCounts>;
   /** Negative clip: no cars, riders, pedestrians, or debris. Every frame has an empty label file. */
   empty?: boolean;
+  /**
+   * Buildings, cars, and rigs cast sun shadows. Off for every clip before
+   * round 3, so their frames render the same; the parked-bike clips turn it on
+   * so bikes against a building front sit in its shade.
+   */
+  shadows?: boolean;
+  /** Where this clip's parked bikes go, so they land in frame. Default: anywhere on Michigan. */
+  park?: ParkWindow;
+  /**
+   * Shade lighting for this clip only: ambient (hemi and environment) and
+   * sun scaled, and the sun raised to at least `minElevationDeg`, so cast
+   * shade reads as dark as it does on real paving. Clips without it light
+   * from `SUN` exactly.
+   */
+  shade?: ShadeLight;
 };
+
+export type ShadeLight = {
+  hemi: number;
+  env: number;
+  key: number;
+  minElevationDeg: number;
+  /** Multiplier on the preset's tone-mapping exposure. Default 1. */
+  exposure?: number;
+  /** Sun direction (any length) in place of the preset's, before the elevation floor. */
+  sunFrom?: [number, number, number];
+  /** Sun and sky-dome colours in place of the preset's. */
+  keyColor?: number;
+  hemiColor?: number;
+};
+
+/** Light preset a clip records under: `SUN[timeOfDay]` untouched unless the clip sets `shade`. */
+export function clipSun(spec: Pick<SequenceSpec, "timeOfDay" | "shade">): SunPreset {
+  const sun = SUN[spec.timeOfDay];
+  const shade = spec.shade;
+  if (!shade) return sun;
+  const [x, y, z] = shade.sunFrom ?? sun.keyPosition;
+  const flat = Math.hypot(x, z);
+  const minY = flat * Math.tan((shade.minElevationDeg * Math.PI) / 180);
+  return {
+    ...sun,
+    hemi: shade.hemiColor ?? sun.hemi,
+    key: shade.keyColor ?? sun.key,
+    hemiIntensity: sun.hemiIntensity * shade.hemi,
+    env: sun.env * shade.env,
+    keyIntensity: sun.keyIntensity * shade.key,
+    keyPosition: [x, Math.max(y, minY), z],
+    exposure: sun.exposure * (shade.exposure ?? 1),
+  };
+}
 
 /** AGL of the nadir passes, metres. */
 export const TOP_DOWN_ALTITUDES = [30, 60, 120] as const;
@@ -148,7 +197,7 @@ export type RecordedSequence = {
   frames: CorpusFrame[];
   /** PNG bytes, base64, one per frame. */
   pngs: string[];
-  /** Person boxes dropped under `MIN_PERSON_PX`, per frame. Audit only, never labels. */
+  /** Boxes dropped by the size floors, per frame: small pedestrians, and sub-4 px (training scale) riders on a rig under the rig floor, with that rig. Audit only, never labels. */
   culled?: CorpusObject[][];
 };
 
@@ -175,6 +224,32 @@ function barrier(laneId: string, s: number, id: number, span = 12): BlockadePlac
 }
 
 const CLIP = { frames: 12, hz: 5 } as const;
+
+/** Round 3 parked-bike clips: dim ambient, strong and higher sun, so building shade is deep. */
+const SHADE_LIGHT: ShadeLight = { hemi: 0.18, env: 0.15, key: 2.2, minElevationDeg: 45 };
+/**
+ * Noon parked clip: a late-morning sun from the east at about 45°, so the
+ * east-side buildings throw shade across the east walk, with the sun and
+ * exposure trimmed so the lit paving is not clipped.
+ */
+const SHADE_LIGHT_NOON: ShadeLight = {
+  hemi: 0.17,
+  env: 0.15,
+  key: 1.0,
+  exposure: 0.82,
+  minElevationDeg: 40,
+  sunFrom: [64, 64, 12],
+};
+/** Dusk parked clip: warmer than night but not the red preset, bright enough to read. */
+const SHADE_LIGHT_DUSK: ShadeLight = {
+  hemi: 0.3,
+  env: 0.3,
+  key: 2.9,
+  exposure: 1.4,
+  minElevationDeg: 40,
+  keyColor: 0xffb48a,
+  hemiColor: 0xc8b4b0,
+};
 
 /**
  * Clips split by sequence id: every frame of a clip stays in one of train,
@@ -940,6 +1015,117 @@ export const SEQUENCES: readonly SequenceSpec[] = [
     blockades: [],
     topDown: true,
     agents: { bicycle: 12, scooter: 4, motorbike: 2 },
+  },
+  // Round 3, from Edge's round 2 miss diagnosis: parked bikes with no rider,
+  // 25–45 px at capture, in rack clusters of four, out in the open, against
+  // building fronts, behind parked cars, and on lamp poles. These clips cast
+  // shadows, so facade bikes on the east walk sit in building shade at noon
+  // and on the west walk at dusk. Moving riders keep their own person boxes.
+  {
+    id: "s32-dawn-top30-parked",
+    split: "train",
+    seed: 307,
+    density: 0.9,
+    timeOfDay: "dawn",
+    ...CLIP,
+    warmupS: 10,
+    altitude: 30,
+    x: 0,
+    z: -30,
+    lookX: 0,
+    lookZ: -60,
+    pitch: 0,
+    roll: 0,
+    driftX: 0,
+    driftZ: 0.5,
+    lookDriftX: 0,
+    lookDriftZ: 0.5,
+    debris: [],
+    blockades: [],
+    topDown: true,
+    agents: { parked: 16 },
+    shadows: true,
+    shade: SHADE_LIGHT,
+    park: { z: [-50, -14] },
+  },
+  {
+    id: "s33-noon-top30-parked",
+    split: "train",
+    seed: 311,
+    density: 0.9,
+    timeOfDay: "noon",
+    ...CLIP,
+    warmupS: 12,
+    altitude: 30,
+    x: 0,
+    z: 30,
+    lookX: 0,
+    lookZ: 0,
+    pitch: 0,
+    roll: 0,
+    driftX: 0,
+    driftZ: -0.5,
+    lookDriftX: 0,
+    lookDriftZ: -0.5,
+    debris: [],
+    blockades: [],
+    topDown: true,
+    agents: { parked: 16 },
+    shadows: true,
+    shade: SHADE_LIGHT_NOON,
+    park: { z: [14, 50], side: 1 },
+  },
+  {
+    id: "s34-noon-parked-angled",
+    split: "train",
+    seed: 313,
+    density: 0.9,
+    timeOfDay: "noon",
+    ...CLIP,
+    warmupS: 10,
+    altitude: 18,
+    x: 7,
+    z: 56,
+    lookX: 15,
+    lookZ: 44,
+    pitch: 0,
+    roll: 0.02,
+    driftX: 0,
+    driftZ: -0.8,
+    lookDriftX: 0,
+    lookDriftZ: -0.8,
+    debris: [],
+    blockades: [],
+    agents: { parked: 18 },
+    shadows: true,
+    shade: SHADE_LIGHT,
+    park: { z: [28, 56], side: 1 },
+  },
+  {
+    id: "s35-dusk-parked-angled-val",
+    split: "val",
+    seed: 317,
+    density: 0.9,
+    timeOfDay: "dusk",
+    ...CLIP,
+    warmupS: 10,
+    altitude: 18,
+    x: -7,
+    z: -56,
+    lookX: -15,
+    lookZ: -44,
+    pitch: 0,
+    roll: -0.02,
+    driftX: 0,
+    driftZ: 0.8,
+    lookDriftX: 0,
+    lookDriftZ: 0.8,
+    debris: [],
+    blockades: [],
+    agents: { parked: 18 },
+    shadows: true,
+    shade: SHADE_LIGHT_DUSK,
+    park: { z: [-56, -28], side: -1 },
   },
 ];
 

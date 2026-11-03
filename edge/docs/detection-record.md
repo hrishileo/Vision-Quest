@@ -107,3 +107,7 @@ Notes for the 2026-11-03 TEST SET 2 rows (larger held-out set; the 10-frame rows
 - Run 3 draws the fewest vehicle boxes on nothing tiled (194 against 209 for run 2 and 207 for run 1) and on full 640 (121 against 132 and 136). On full 1280 run 1 is lowest (127; run 3 133, run 2 141). Run 3's gain over run 2 is about 7%, much smaller than the 18 to 11 seen on the 10 frames. Vehicles found are within 1% across runs.
 - Bikes are found far less often than on the 10 frames suggested: at best 25 of 101 (run 1, tiled, cutoff 0.05, with 214 bike boxes drawn). About 30 to 40 labeled bikes per setting are boxed as another class. Parked and ridden bikes are both missed: at best 15 of 66 parked and 10 of 35 ridden.
 - The weights split in the note above was decided on the 10-frame set. On this set run 3 is equal to or better than run 2 on people and bikes in every setting except one (full 1280 at bike cutoff 0.10: 15 bikes against 16), so the split is up for review.
+
+Note added 2026-11-03 (single weights, Jarvis's decision after test set 2; replaces the weights split above):
+- Run 3 (bike_run3.pt) now handles every class: vehicle, person, bicycle and motor. One model is loaded for all jobs. The earlier split (run 3 for vehicles, run 2 for people and bikes) no longer applies.
+- Why: on test set 2, run 3 matches or beats run 2 in every setting except one (full 1280 at bike cutoff 0.10, where it finds 15 bikes against 16). It also draws the fewest vehicle boxes on nothing tiled (194) and on full 640 (121).

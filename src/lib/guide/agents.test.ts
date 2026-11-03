@@ -458,7 +458,10 @@ describe("minimum pedestrian size", () => {
       const raw = agentLabelsRaw(sim.agents, camera);
       const { kept, culled } = cullSmallPersons(raw);
       const persons = kept.filter((o) => o.class === "person");
-      for (const o of persons) assert.ok(Math.min(o.bbox.w, o.bbox.h) >= MIN_PERSON_PX, o.trackId);
+      for (const o of persons) {
+        if (o.riding) continue;
+        assert.ok(Math.min(o.bbox.w, o.bbox.h) >= MIN_PERSON_PX, o.trackId);
+      }
       const rawPersons = raw.filter((o) => o.class === "person").length;
       assert.equal(persons.length + culled.length, rawPersons, id);
       // Riders' vehicles are never culled.
@@ -473,16 +476,81 @@ describe("minimum pedestrian size", () => {
           0,
           "no 30 m pedestrian is under the floor",
         );
-        // Most 30 m riders clear the floor too, so the person box survives into labels.
+        // Every rider keeps its person box, whatever its size.
         const riders = raw.filter((o) => o.riding);
-        assert.ok(
-          kept.filter((o) => o.riding).length >= riders.length / 2,
-          `${kept.filter((o) => o.riding).length}/${riders.length} riders kept`,
-        );
+        assert.equal(kept.filter((o) => o.riding).length, riders.length);
       }
       if (id === "top120") {
         assert.ok(rawPersons >= 5, "120 m frame has pedestrians to cull");
-        assert.equal(persons.length, 0, "every 120 m pedestrian is under the floor");
+        assert.equal(
+          persons.filter((o) => !o.riding).length,
+          0,
+          "every 120 m pedestrian is under the floor",
+        );
+      }
+    }
+  });
+});
+
+describe("riders keep their person box under the floor", () => {
+  const box = (w: number, h: number) => ({ x: 100, y: 100, w, h });
+  const base = {
+    type: "person" as const,
+    kind: null,
+    laneId: null,
+    position: { x: 0, y: 0, z: 0 },
+    speed: 1,
+    zone: null,
+  };
+
+  it("keeps a 3 px rider next to its kept bicycle or motor, and still drops a 3 px pedestrian", () => {
+    const bike: CorpusObject = { ...base, class: "bicycle", type: "bicycle", trackId: "bike-4", bbox: box(12, 9) };
+    const motor: CorpusObject = { ...base, class: "motor", type: "scooter", trackId: "motor-5", bbox: box(10, 8) };
+    const bikeRider: CorpusObject = {
+      ...base,
+      class: "person",
+      trackId: "ped-rider-4",
+      riding: "bike-4",
+      bbox: box(3, 4),
+    };
+    const motorRider: CorpusObject = {
+      ...base,
+      class: "person",
+      trackId: "ped-rider-5",
+      riding: "motor-5",
+      bbox: box(2.5, 5),
+    };
+    const walker: CorpusObject = { ...base, class: "person", trackId: "ped-9", bbox: box(3, 4) };
+    const orphan: CorpusObject = { ...base, class: "person", trackId: "ped-rider-7", riding: "bike-7", bbox: box(3, 4) };
+    const { kept, culled } = cullSmallPersons([bike, bikeRider, motor, motorRider, walker, orphan]);
+    assert.deepEqual(
+      kept.map((o) => o.trackId),
+      ["bike-4", "ped-rider-4", "motor-5", "ped-rider-5"],
+    );
+    // The floor still applies to pedestrians, and to a rider whose vehicle box is not in the frame.
+    assert.deepEqual(
+      culled.map((o) => o.trackId),
+      ["ped-9", "ped-rider-7"],
+    );
+  });
+
+  it("leaves no labelled bicycle or motor without its rider box in 30 and 60 m nadir frames", () => {
+    for (const id of ["top30", "top60"]) {
+      const p = fixtures.nadir.find((n) => n.id === id)!;
+      const sim = new TrafficSim(p.seed);
+      sim.reset(p.seed, p.density, { bicycle: 14, scooter: 6, motorbike: 4 });
+      sim.advance(Math.round(p.warmupS / SIM_STEP));
+      const { kept } = cullSmallPersons(agentLabelsRaw(sim.agents, nadirCamera(p.x, p.agl, p.z, p.heading)));
+      const ridden = new Set(kept.filter((o) => o.riding).map((o) => o.riding));
+      const rigs = kept.filter((o) => o.class === "bicycle" || o.class === "motor");
+      assert.ok(rigs.length >= 5, `${id}: ${rigs.length} rigs`);
+      const small = kept.filter((o) => o.riding && Math.min(o.bbox.w, o.bbox.h) < MIN_PERSON_PX);
+      if (id === "top60") assert.ok(small.length > 0, "60 m has riders under the floor to keep");
+      for (const rig of rigs) {
+        const b = rig.bbox;
+        // A rig cut by the frame edge can have its rider fully outside the frame.
+        if (b.x < 1 || b.y < 1 || b.x + b.w > CORPUS_WIDTH - 1 || b.y + b.h > CORPUS_HEIGHT - 1) continue;
+        assert.ok(ridden.has(rig.trackId), `${id} ${rig.trackId} lost its rider`);
       }
     }
   });

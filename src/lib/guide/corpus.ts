@@ -362,15 +362,22 @@ export function agentLabels(
  */
 export const MIN_PERSON_PX = 6;
 
-/** Drop person boxes under `minPx` on their shorter side. Other classes pass through. */
+/**
+ * Drop pedestrian boxes under `minPx` on their shorter side. A rider keeps its
+ * person box at any size while its bicycle or motor box is in the frame, so a
+ * drawn rider is never left unlabelled inside a vehicle box (VisDrone boxes
+ * the rider separately too). Other classes pass through.
+ */
 export function cullSmallPersons(
   objects: readonly CorpusObject[],
   minPx: number = MIN_PERSON_PX,
 ): { kept: CorpusObject[]; culled: CorpusObject[] } {
   const kept: CorpusObject[] = [];
   const culled: CorpusObject[] = [];
+  const vehicles = new Set(objects.filter((o) => o.class !== "person").map((o) => o.trackId));
   for (const obj of objects) {
-    if (obj.class === "person" && Math.min(obj.bbox.w, obj.bbox.h) < minPx) culled.push(obj);
+    const rider = obj.riding !== undefined && vehicles.has(obj.riding);
+    if (obj.class === "person" && !rider && Math.min(obj.bbox.w, obj.bbox.h) < minPx) culled.push(obj);
     else kept.push(obj);
   }
   return { kept, culled };

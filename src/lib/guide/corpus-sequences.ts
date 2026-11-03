@@ -146,7 +146,38 @@ export type SequenceSpec = {
   shadows?: boolean;
   /** Where this clip's parked bikes go, so they land in frame. Default: anywhere on Michigan. */
   park?: ParkWindow;
+  /**
+   * Shade lighting for this clip only: ambient (hemi and environment) and
+   * sun scaled, and the sun raised to at least `minElevationDeg`, so cast
+   * shade reads as dark as it does on real paving. Clips without it light
+   * from `SUN` exactly.
+   */
+  shade?: ShadeLight;
 };
+
+export type ShadeLight = {
+  hemi: number;
+  env: number;
+  key: number;
+  minElevationDeg: number;
+};
+
+/** Light preset a clip records under: `SUN[timeOfDay]` untouched unless the clip sets `shade`. */
+export function clipSun(spec: Pick<SequenceSpec, "timeOfDay" | "shade">): SunPreset {
+  const sun = SUN[spec.timeOfDay];
+  const shade = spec.shade;
+  if (!shade) return sun;
+  const [x, y, z] = sun.keyPosition;
+  const flat = Math.hypot(x, z);
+  const minY = flat * Math.tan((shade.minElevationDeg * Math.PI) / 180);
+  return {
+    ...sun,
+    hemiIntensity: sun.hemiIntensity * shade.hemi,
+    env: sun.env * shade.env,
+    keyIntensity: sun.keyIntensity * shade.key,
+    keyPosition: [x, Math.max(y, minY), z],
+  };
+}
 
 /** AGL of the nadir passes, metres. */
 export const TOP_DOWN_ALTITUDES = [30, 60, 120] as const;
@@ -183,6 +214,9 @@ function barrier(laneId: string, s: number, id: number, span = 12): BlockadePlac
 }
 
 const CLIP = { frames: 12, hz: 5 } as const;
+
+/** Round 3 parked-bike clips: dim ambient, strong and higher sun, so building shade is deep. */
+const SHADE_LIGHT: ShadeLight = { hemi: 0.18, env: 0.15, key: 2.2, minElevationDeg: 45 };
 
 /**
  * Clips split by sequence id: every frame of a clip stays in one of train,
@@ -978,6 +1012,7 @@ export const SEQUENCES: readonly SequenceSpec[] = [
     topDown: true,
     agents: { parked: 16 },
     shadows: true,
+    shade: SHADE_LIGHT,
     park: { z: [-50, -14] },
   },
   {
@@ -1004,6 +1039,7 @@ export const SEQUENCES: readonly SequenceSpec[] = [
     topDown: true,
     agents: { parked: 16 },
     shadows: true,
+    shade: SHADE_LIGHT,
     park: { z: [14, 50] },
   },
   {
@@ -1029,6 +1065,7 @@ export const SEQUENCES: readonly SequenceSpec[] = [
     blockades: [],
     agents: { parked: 18 },
     shadows: true,
+    shade: SHADE_LIGHT,
     park: { z: [28, 56], side: 1 },
   },
   {
@@ -1054,6 +1091,7 @@ export const SEQUENCES: readonly SequenceSpec[] = [
     blockades: [],
     agents: { parked: 18 },
     shadows: true,
+    shade: SHADE_LIGHT,
     park: { z: [-56, -28], side: -1 },
   },
 ];

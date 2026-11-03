@@ -62,7 +62,7 @@ import {
   type CorpusFrame,
   type CorpusObject,
 } from "./corpus";
-import { SUN, type SequenceSpec, type TimeOfDay } from "./corpus-sequences";
+import { clipSun, type SequenceSpec, type SunPreset } from "./corpus-sequences";
 import type { DebrisDef } from "./debris";
 
 const _v = new THREE.Vector3();
@@ -202,7 +202,7 @@ export class GuideEngine {
   private corpusCamPos = new THREE.Vector3();
   private corpusRay = new THREE.Raycaster();
   private scripted = false;
-  private scriptedTod: TimeOfDay | null = null;
+  private scriptedSun: SunPreset | null = null;
   /** Ground point the scripted sun's shadow map centres on, for clips that opt into cast shadows. */
   private scriptedShadowAt: { x: number; z: number } | null = null;
   private debrisHome: { id: number; x: number; z: number; yaw: number }[] | null = null;
@@ -727,8 +727,8 @@ export class GuideEngine {
       this.key.castShadow = false;
       this.rim.intensity = 0.25;
       this.renderer.toneMappingExposure = 1.2;
-    } else if (this.scriptedTod) {
-      this.applyScriptedSun(this.scriptedTod);
+    } else if (this.scriptedSun) {
+      this.applyScriptedSun(this.scriptedSun);
     } else {
       this.hemi.color.setHex(0xd5dbe0);
       this.hemi.groundColor.setHex(0x1a1c20);
@@ -1713,8 +1713,7 @@ export class GuideEngine {
   }
 
   /** `fogLift` pushes the fog band out by that many metres so a high nadir pass is not washed out. */
-  private applyScriptedSun(tod: TimeOfDay, fogLift = 0) {
-    const sun = SUN[tod];
+  private applyScriptedSun(sun: SunPreset, fogLift = 0) {
     this.hemi.color.setHex(sun.hemi);
     this.hemi.groundColor.setHex(sun.hemiGround);
     this.hemi.intensity = sun.hemiIntensity;
@@ -1859,13 +1858,13 @@ export class GuideEngine {
       this.studio.visible = false;
       this.world.group.visible = true;
       this.studioCar.visible = false;
-      this.scriptedTod = spec.timeOfDay;
+      this.scriptedSun = clipSun(spec);
       this.scriptedShadowAt = spec.shadows
         ? spec.topDown
           ? { x: spec.x, z: spec.z }
           : { x: (spec.x + spec.lookX) / 2, z: (spec.z + spec.lookZ) / 2 }
         : null;
-      this.applyScriptedSun(spec.timeOfDay, spec.topDown ? spec.altitude : 0);
+      this.applyScriptedSun(this.scriptedSun, spec.topDown ? spec.altitude : 0);
       const cam = this.drone.droneCam;
       prevFar = cam.far;
       // A 120 m nadir corner ray runs about 1.75 × AGL. Keep the whole footprint inside the far plane.
@@ -1937,7 +1936,7 @@ export class GuideEngine {
       if (spec.empty) this.setRoadUsersVisible(true);
       this.corpus.stop();
       this.scripted = false;
-      this.scriptedTod = null;
+      this.scriptedSun = null;
       if (this.scriptedShadowAt) {
         this.scriptedShadowAt = null;
         this.key.target.position.set(0, 0, 0);
